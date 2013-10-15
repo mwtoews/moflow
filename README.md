@@ -1,4 +1,4 @@
 moflow
 ======
 
-A Python package for MODFLOW any related programs
+A Python package for MODFLOW and related programs
