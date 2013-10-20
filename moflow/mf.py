@@ -1,23 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-
+Modflow module
 """
-__version__ = 0.0
-__author__ = 'Mike Toews'
-__email__ = 'mwtoews@gmail.com'
 
 import os
-import sys
 import inspect
 
-# set up a module logger
-import logging
-logger = logging.getLogger('Modflow')
-formatter = logging.Formatter(logging.BASIC_FORMAT)
-handler = logging.StreamHandler()
-handler.setFormatter(formatter)
-logger.handlers = [handler]
-del formatter, handler
+from . import logger, logging
 
 
 class _MFPackage(object):
@@ -28,7 +17,7 @@ class _MFPackage(object):
 
     @property
     def _default_attrname(self):
-        return self.Ftype.lower()
+        return self.__class__.__name__.lower()
 
     def read(self, **kwargs):
         raise NotImplementedError("'read' not implemented for " +
@@ -41,6 +30,10 @@ class _MFPackage(object):
 
 class DIS(_MFPackage):
     """Discretization file"""
+
+
+class DISU(_MFPackage):
+    """Unstructured Discretization file"""
 
 
 class MULT(_MFPackage):
@@ -80,7 +73,8 @@ class UPW(_MFPackage):
 
 
 class SWT(_MFPackage):
-    pass
+    """Subsidence and Aquifer-System Compaction Package for Water-Table
+    Aquifers"""
 
 
 class HFB6(_MFPackage):
@@ -133,6 +127,18 @@ class PCG(_MFPackage):
 
 class DE4(_MFPackage):
     """Direct Solution Package"""
+
+
+class SMS(_MFPackage):
+    """Sparse Matrix Solver"""
+
+
+class CLN(_MFPackage):
+    """Connected Linear Network Process"""
+
+
+class GNC(_MFPackage):
+    """Ghost Node Correction Package"""
 
 
 class IBS(_MFPackage):
@@ -205,6 +211,10 @@ class STR(_MFPackage):
 
 class SFR(_MFPackage):
     """Streamflow-Routing Package"""
+
+
+class SWR(_MFPackage):
+    """Surface-Water Routing Package"""
 
 
 class KDEP(_MFPackage):
@@ -315,7 +325,6 @@ class Modflow(object):
     dir = None
     _logger = None
     _packages = None
-    _Nunit = None
 
     def __init__(self, **kwargs):
         """Create a MODFLOW simulation"""
@@ -324,17 +333,81 @@ class Modflow(object):
         self._logger.handlers = logger.handlers
         self._logger.setLevel(logger.level)
         self._packages = []
-        self._Nunit = {}
         if kwargs:
             raise ValueError("'kwargs' do nothing at the moment")
 
+    def __len__(self):
+        """Returns number of packages"""
+        return len(self._packages)
+
+    def __iter__(self):
+        """Allow iteration through sequence of packages"""
+        return iter(self._packages)
+
+    def __setattr__(self, name, value):
+        """Sets Modflow package object"""
+        existing = getattr(self, name, None)
+        if hasattr(self, name) and not isinstance(existing, _MFPackage):
+            # Set existing, non-Modflow package object as normal
+            object.__setattr__(self, name, value)
+        elif isinstance(value, _MFPackage):
+            if existing and existing.__class__ != value.__class__:
+                self._logger.warn('attribute %r: replacing value of %r '
+                                  ' with %r', name, existing.__class__,
+                                  value.__class__)
+            if name not in self._packages:
+                self._packages.append(name)
+                self._logger.debug('attribute %r: adding %r package',
+                                   name, value.__class__.__name__)
+                if isinstance(existing, _MFPackage):
+                    self._logger.error('attribute %r: existed before, but was '
+                                       'not found in _packages list', name)
+            else:
+                if existing is None:
+                    self._logger.error('attribute %r: existed in _packages '
+                                       'before it was an attribute', name)
+                else:
+                    self._logger.debug('attribute %r: replacing %r with '
+                                       'different object', name,
+                                       value.__class__.__name__)
+            object.__setattr__(self, name, value)
+        else:
+            raise ValueError(("attribute %r (%r) must be a _MFPackage object "
+                              "or other existing attribute.") % (name, value))
+
+    def __delattr__(self, name):
+        """Deletes package object"""
+        self._logger.debug('delattr %r', name)
+        if name in self._packages:
+            del self._packages[self._packages.index(name)]
+        object.__delattr__(self, name)
+
+    def append(self, package):
+        """Append a pacage to the end, usign a default attribute"""
+        if not isinstance(package, _MFPackage):
+            raise ValueError("value must be a _MFPackage-related object; "
+                             "found " + repr(package.__class__))
+        name = package._default_attrname
+        if hasattr(self, name):
+            raise ValueError(
+                "attribute %r already exists; use setattr to replace" % name)
+        setattr(self, name, package)
+
     def read(self, path, **kwargs):
-        """Read a MODFLOW simulation from a Name File"""
-        self._logger.info('reading Name File %s', path)
+        """Read a MODFLOW simulation from a Name File (with *.nam extension)
+
+        Use 'dir' keyword to specify the starting directory relative to
+        other files referenced in the Name File, otherwise it is assumed
+        to be relative to the same as the Name File.
+        """
+        self._logger.info('reading Name File: %s', path)
         with open(path, 'r') as fp:
             lines = fp.readlines()
         if 'dir' in kwargs:
             self.dir = kwargs.pop('dir')
+            if self.dir is None or not os.path.isdir(str(self.dir)):
+                self._logger.error("'dir' is not a directory: %s", self.dir)
+                self.dir = os.path.dirname(path)
         else:
             self.dir = os.path.dirname(path)
         if kwargs:
@@ -344,8 +417,9 @@ class Modflow(object):
         log.handlers = logger.handlers
         log.setLevel(logger.level)
         self._packages = []
+        allNunit = {}
         available_packages = _get_packages()
-        D = {}
+        Dch = {}  # directory cache
         for ln, line in enumerate(lines):
             line = line.rstrip()
             if len(line) == 0:
@@ -363,12 +437,12 @@ class Modflow(object):
                 raise ValueError(
                     'line %d has %d items, but 3 or 4 are expected' %
                     (ln + 1, len(dat)))
-            Ftype = dat[0].upper()
-            Nunit, Fname = dat[1:3]
+            Ftype, Nunit, Fname = dat[:3]
             if len(dat) >= 4:
                 Option = dat[3]
             else:
                 Option = None
+            Ftype = Ftype.upper()
             if Ftype.startswith('DATA'):
                 log.debug('found %r', Ftype)
                 obj = _MFData()
@@ -381,25 +455,6 @@ class Modflow(object):
                 obj = _MFPackage()
             obj.parent = self
             obj.Ftype = Ftype
-            Fpath = os.path.join(self.dir, Fname)
-            if isinstance(obj, _MFPackage) and not os.path.isfile(Fpath):
-                file_exists = False
-                test_dir, test_fname = os.path.split(Fname.replace('\\', '/'))
-                pth = os.path.join(self.dir, test_dir)
-                if os.path.isdir(pth):
-                    if pth not in D:
-                        D[pth] = dict([(f.lower(), f) for f
-                                       in os.listdir(pth)])
-                    test_fname = test_fname.lower()
-                    if test_fname in D[pth]:
-                        file_exists = True
-                        Fname = os.path.join(test_dir, D[pth][test_fname])
-                        log.info("%d:Fname: changing to '%s'", ln + 1, Fname)
-                        Fpath = os.path.join(pth, test_fname)
-                if not file_exists:
-                    log.warn("%d:Fname: '%s' does not exist in '%s'",
-                             ln + 1, Fname, self.dir)
-            obj.Fname = Fname
             try:
                 Nunit = int(Nunit)
             except ValueError:
@@ -407,13 +462,34 @@ class Modflow(object):
                          ln + 1, Nunit)
             # check if unique
             if Nunit:
-                if Nunit in self._Nunit:
+                if Nunit in allNunit:
                     log.warn(
                         "%d:Nunit: %r already assigned for %r package",
-                        ln + 1, Nunit, self._Nunit[Nunit].__class__.__name__)
+                        ln + 1, Nunit, allNunit[Nunit].__class__.__name__)
                 else:
-                    self._Nunit[Nunit] = obj
+                    allNunit[Nunit] = obj
             obj.Nunit = Nunit
+            if os.path.sep == '/':
+                Fname = Fname.replace('\\', '/')
+            Fpath = os.path.join(self.dir, Fname)
+            if isinstance(obj, _MFPackage) and not os.path.isfile(Fpath):
+                file_exists = False
+                test_dir, test_fname = os.path.split(Fname)
+                pth = os.path.join(self.dir, test_dir)
+                if os.path.isdir(pth):
+                    if pth not in Dch:
+                        Dch[pth] = dict([(f.lower(), f) for f
+                                         in os.listdir(pth)])
+                    test_fname = test_fname.lower()
+                    if test_fname in Dch[pth]:
+                        file_exists = True
+                        Fname = os.path.join(test_dir, Dch[pth][test_fname])
+                        log.info("%d:Fname: changing to '%s'", ln + 1, Fname)
+                        Fpath = os.path.join(pth, test_fname)
+                if not file_exists:
+                    log.warn("%d:Fname: '%s' does not exist in '%s'",
+                             ln + 1, Fname, self.dir)
+            obj.Fname = Fname
             obj.Option = Option
             if isinstance(obj, _MFPackage):
                 setattr(self, obj._default_attrname, obj)
@@ -426,38 +502,3 @@ class Modflow(object):
                 package.read()
             except NotImplementedError:
                 self._logger.info("'read' for %r not implemented", name)
-
-    def __len__(self):
-        """Returns number of packages"""
-        return len(self._packages)
-
-    def __getitem__(self, key):
-        """Returns package from index"""
-        return self._packages[key]
-
-    def __getattr__(self, name):
-        """Returns package object"""
-        if not name.startswith('__'):
-            self._logger.debug('getattr %r', name)
-        try:
-            return object.__getattr__(self, name)
-        except AttributeError:
-            raise AttributeError('%r does not have attribute %r' %
-                                 (self.__class__.__name__, name))
-
-    def __setattr__(self, name, value):
-        """Sets Modflow package object"""
-        #if name != '_logger':
-        #    self._logger.debug('setattr %r with %r', name, value)
-        object.__setattr__(self, name, value)
-        if isinstance(value, _MFPackage):
-            self._logger.debug('adding %r package to attribute %r',
-                               value.Ftype, name)
-            self._packages.append(name)
-
-    def __delattr__(self, name):
-        """Deletes package object"""
-        self._logger.debug('delattr %r', name)
-        if name in self._packages:
-            del self._packages[name]
-        object.__delattr__(self, name)
