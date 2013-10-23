@@ -10,22 +10,109 @@ from . import logger, logging
 
 
 class _MFPackage(object):
-    parent = None  # back-reference to Modflow object
-    Ftype = None
-    Nunit = None
-    Fname = None
+    """The inherrited ___class__.__name__ is the Fname of the package, which
+    is always upper case and my have a version number following"""
 
     @property
-    def _default_attrname(self):
+    def _attr_name(self):
+        """It is assumed Modflow properties to be the lower-case name of Ftype,
+        or the class name"""
         return self.__class__.__name__.lower()
 
-    def read(self, **kwargs):
+    @property
+    def _default_fname(self):
+        """Generate default filename"""
+        if self.parent is None:
+            raise AttributeError("'parent' not set to a Modflow object")
+        prefix = self.parent.prefix
+        if prefix is None:
+            raise ValueError("'parent.prefix' is not set")
+        return prefix + '.' + self._attr_name
+
+    @property
+    def parent(self):
+        """Returns back-reference to Modflow object"""
+        return getattr(self, '_parent', None)
+
+    @parent.setter
+    def parent(self, value):
+        if value is not None and not isinstance(value, Modflow):
+            raise ValueError("'parent' needs to be a Modflow object; found "
+                             + str(type(value)))
+        setattr(self, '_parent', value)
+
+    @property
+    def Nunit(self):
+        """Nunit is the Fortran unit to be used when reading from or writing
+        to the file. Any legal unit number on the computer being used can
+        be specified except units 96-99. Unspecified is unit 0."""
+        return getattr(self, '_Nunit', 0)
+
+    @Nunit.setter
+    def Nunit(self, value):
+        if value is None:
+            value = 0
+        else:
+            try:
+                value = int(value)
+            except ValueError:
+                self._logger.error("Nunit: %r is not an integer", value)
+        if value >= 96 and value <= 99:
+            self._logger.error("Nunit: %r is not valid", value)
+        setattr(self, '_Nunit', value)
+
+    @property
+    def Fname(self):
+        """Fname is the name of the file, which is a character value.
+        Pathnames may be specified as part of Fname. However, space characters
+        are not allowed in Fname."""
+        return getattr(self, '_Fname', None)
+
+    @Fname.setter
+    def Fname(self, value):
+        if value is not None:
+            if ' ' in value:
+                self._logger.warn("Fname: %d space characters found in %r",
+                                  value.count(' '), value)
+            if os.path.sep == '/':  # for reading on POSIX systems
+                if '\\' in value:
+                    self._logger.info(r"Fname: replacing '\' with '/' path "
+                                      "separators to read file on host system")
+                    value = value.replace('\\', '/')
+        self._Fname = value
+
+    @property
+    def NamOption(self):
+        """Returns 'Option' for Name File, which can be: OLD, REPLACE, UNKNOWN
+        """
+        return getattr(self, '_NamOption', None)
+
+    @NamOption.setter
+    def NamOption(self, value):
+        if hasattr(value, 'upper') and value.upper() != value:
+            self._logger.info('NamOption: changing value from %r to %r',
+                              value, value.upper())
+            value = value.upper()
+        expected = [None, 'OLD', 'REPLACE', 'UNKNOWN']
+        if value not in expected:
+            self._logger.error("NamOption: %r is not valid; expecting one of "
+                               "%r", value, expected)
+        self._NamOption = value
+
+    def read(self, *args, **kwargs):
         raise NotImplementedError("'read' not implemented for " +
                                   repr(self.__class__.__name__))
 
-    def write(self, **kwargs):
+    def write(self, *args, **kwargs):
         raise NotImplementedError("'write' not implemented for " +
                                   repr(self.__class__.__name__))
+
+    def __init__(self):
+        """Package constructor"""
+        # Set up logger
+        self._logger = logging.getLogger(self.__class__.__name__)
+        self._logger.handlers = logger.handlers
+        self._logger.setLevel(logger.level)
 
 
 class DIS(_MFPackage):
@@ -321,20 +408,63 @@ def _get_packages():
 
 
 class Modflow(object):
-    """Parent class for MODFLOW packages"""
-    dir = None
-    _logger = None
-    _packages = None
+    """Parent class for MODFLOW packages
 
-    def __init__(self, **kwargs):
+    Each package can attach to this object as a lower-case attribute name
+    of the package Ftype.
+
+    Example:
+    >>> m = Modflow()
+    >>> m.dis = DIS()
+    >>> m.bas6 = BAS6()
+    """
+
+    @property
+    def ref_dir(self):
+        """Returns reference directory for MODFLOW files"""
+        return getattr(self, '_ref_dir', os.getcwd())
+
+    @ref_dir.setter
+    def ref_dir(self, value):
+        path = str(value)
+        if not os.path.isdir(path):
+            self._logger.error("'ref_dir' is not a directory: '%s'", path)
+        setattr(self, '_ref_dir', path)
+
+    @property
+    def prefix(self):
+        """Returns prefix name of MODFLOW simulation files"""
+        return getattr(self, '_prefix', None)
+
+    @prefix.setter
+    def prefix(self, value):
+        if value is not None:
+            if 'upper' not in value:
+                raise ValueError("'prefix' is not string-like")
+            elif ' ' in value:
+                raise ValueError("spaces found in 'prefix' value")
+        setattr(self, '_prefix', value)
+
+    _logger = None
+    _packages = None  # _MFPackage objects
+    data = None  # _MFData objects
+
+    def __init__(self, *args, **kwargs):
         """Create a MODFLOW simulation"""
         # Set up logger
         self._logger = logging.getLogger(self.__class__.__name__)
         self._logger.handlers = logger.handlers
         self._logger.setLevel(logger.level)
         self._packages = []
+        self.data = {}
+        if args:
+            self._logger.error("'args' do nothing at the moment: %r", args)
         if kwargs:
-            raise ValueError("'kwargs' do nothing at the moment")
+            self._logger.error("'kwargs' do nothing at the moment: %r", kwargs)
+
+    def __repr__(self):
+        """Representation of Modflow object, showing packages"""
+        return '<%s: %s>' % (self.__class__.__name__, ', '.join(list(self)))
 
     def __len__(self):
         """Returns number of packages"""
@@ -347,11 +477,16 @@ class Modflow(object):
     def __setattr__(self, name, value):
         """Sets Modflow package object"""
         existing = getattr(self, name, None)
-        if hasattr(self, name) and not isinstance(existing, _MFPackage):
+        if ((hasattr(self, name) or name.startswith('_')) and
+                not isinstance(existing, _MFPackage)):
             # Set existing, non-Modflow package object as normal
             object.__setattr__(self, name, value)
         elif isinstance(value, _MFPackage):
-            if existing and existing.__class__ != value.__class__:
+            if name != value.__class__.__name__.lower():
+                raise AttributeError("%r must have an attribute name %r" %
+                                     (value.__class__.__name__,
+                                      value.__class__.__name__.lower()))
+            elif existing and existing.__class__ != value.__class__:
                 self._logger.warn('attribute %r: replacing value of %r '
                                   ' with %r', name, existing.__class__,
                                   value.__class__)
@@ -387,29 +522,30 @@ class Modflow(object):
         if not isinstance(package, _MFPackage):
             raise ValueError("value must be a _MFPackage-related object; "
                              "found " + repr(package.__class__))
-        name = package._default_attrname
+        name = package._attr_name
         if hasattr(self, name):
             raise ValueError(
                 "attribute %r already exists; use setattr to replace" % name)
         setattr(self, name, package)
 
-    def read(self, path, **kwargs):
+    def read(self, fname, **kwargs):
         """Read a MODFLOW simulation from a Name File (with *.nam extension)
 
-        Use 'dir' keyword to specify the starting directory relative to
+        Use 'ref_dir' keyword to specify the reference directory relative to
         other files referenced in the Name File, otherwise it is assumed
         to be relative to the same as the Name File.
         """
-        self._logger.info('reading Name File: %s', path)
-        with open(path, 'r') as fp:
+        self._logger.info('reading Name File: %s', fname)
+        with open(fname, 'r') as fp:
             lines = fp.readlines()
-        if 'dir' in kwargs:
-            self.dir = kwargs.pop('dir')
-            if self.dir is None or not os.path.isdir(str(self.dir)):
-                self._logger.error("'dir' is not a directory: %s", self.dir)
-                self.dir = os.path.dirname(path)
+        if 'ref_dir' in kwargs:
+            self.ref_dir = kwargs.pop('ref_dir')
+            if self.ref_dir is None or not os.path.isdir(str(self.ref_dir)):
+                self._logger.error("'ref_dir' is not a directory: %s",
+                                   self.ref_dir)
+                self.ref_dir = os.path.dirname(fname)
         else:
-            self.dir = os.path.dirname(path)
+            self.ref_dir = os.path.dirname(fname)
         if kwargs:
             self._logger.warn('unused keyword arguments: %r', kwargs)
         # Use a separate logger to read the Name File
@@ -417,83 +553,86 @@ class Modflow(object):
         log.handlers = logger.handlers
         log.setLevel(logger.level)
         self._packages = []
-        allNunit = {}
+        allNunit = {}  # check unique Nunit values
         available_packages = _get_packages()
         Dch = {}  # directory cache
-        for ln, line in enumerate(lines):
+        for ln, line in enumerate(lines, start=1):
             line = line.rstrip()
             if len(line) == 0:
-                log.debug('%d: skipping empty line', ln + 1)
+                log.debug('%d: skipping empty line', ln)
                 continue
             elif len(line) > 199:
                 log.warn('%d: has %d characters, but should be <= 199',
-                         ln + 1, len(line))
+                         ln, len(line))
             if line.startswith('#'):
-                log.debug('%d: skipping comment: %s', ln + 1, line[1:])
+                log.debug('%d: skipping comment: %s', ln, line[1:])
                 continue
             # Data Set 1: Ftype Nunit Fname [Option]
             dat = line.split()
             if len(dat) < 3:
                 raise ValueError(
                     'line %d has %d items, but 3 or 4 are expected' %
-                    (ln + 1, len(dat)))
+                    (ln, len(dat)))
             Ftype, Nunit, Fname = dat[:3]
             if len(dat) >= 4:
-                Option = dat[3]
+                Option = dat[3].upper()
             else:
                 Option = None
+            if len(dat) > 4:
+                log.info('%d: ignoring remaining items: %r', ln, dat[4:])
+            # Ftype is the file type, which may be entered in all uppercase,
+            # all lowercase, or any combination.
             Ftype = Ftype.upper()
             if Ftype.startswith('DATA'):
-                log.debug('found %r', Ftype)
                 obj = _MFData()
             elif Ftype in available_packages:
-                log.debug('setting up %r package data', Ftype)
                 obj = available_packages[Ftype]()
+                assert obj.__class__.__name__ == Ftype,\
+                    (obj.__class__.__name__, Ftype)
             else:
                 log.warn("%d:Ftype: %r not identified as a supported "
-                         "file type", ln + 1, Ftype)
+                         "file type", ln, Ftype)
                 obj = _MFPackage()
-            obj.parent = self
-            obj.Ftype = Ftype
-            try:
-                Nunit = int(Nunit)
-            except ValueError:
-                log.warn("%d:Nunit: is not an integer; found %r",
-                         ln + 1, Nunit)
-            # check if unique
-            if Nunit:
-                if Nunit in allNunit:
-                    log.warn(
-                        "%d:Nunit: %r already assigned for %r package",
-                        ln + 1, Nunit, allNunit[Nunit].__class__.__name__)
-                else:
-                    allNunit[Nunit] = obj
+            obj.parent = self  # set back-reference
             obj.Nunit = Nunit
-            if os.path.sep == '/':
-                Fname = Fname.replace('\\', '/')
-            Fpath = os.path.join(self.dir, Fname)
-            if isinstance(obj, _MFPackage) and not os.path.isfile(Fpath):
-                file_exists = False
-                test_dir, test_fname = os.path.split(Fname)
-                pth = os.path.join(self.dir, test_dir)
+            if obj.Nunit and obj.Nunit in allNunit:
+                log.warn("%d:Nunit: %r already assigned for %r",
+                         ln, allNunit[obj.Nunit])
+            else:
+                allNunit[obj.Nunit] = Ftype
+            obj.Fname = Fname
+            obj.Fpath = os.path.join(self.ref_dir, obj.Fname)
+            Fpath_exists = os.path.isfile(obj.Fpath)
+            if not Fpath_exists:
+                testDir, testFname = os.path.split(obj.Fname)
+                pth = os.path.join(self.ref_dir, testDir)
                 if os.path.isdir(pth):
                     if pth not in Dch:
                         Dch[pth] = dict([(f.lower(), f) for f
                                          in os.listdir(pth)])
-                    test_fname = test_fname.lower()
-                    if test_fname in Dch[pth]:
-                        file_exists = True
-                        Fname = os.path.join(test_dir, Dch[pth][test_fname])
-                        log.info("%d:Fname: changing to '%s'", ln + 1, Fname)
-                        Fpath = os.path.join(pth, test_fname)
-                if not file_exists:
-                    log.warn("%d:Fname: '%s' does not exist in '%s'",
-                             ln + 1, Fname, self.dir)
-            obj.Fname = Fname
-            obj.Option = Option
+                    testFname = testFname.lower()
+                    if testFname in Dch[pth]:
+                        Fpath_exists = True
+                        obj.Fname = os.path.join(testDir, Dch[pth][testFname])
+                        log.info("%d:Fname: changing to '%s'", ln, obj.Fname)
+                        obj.Fpath = os.path.join(pth, testFname)
+            if isinstance(obj, _MFPackage) and not Fpath_exists:
+                log.warn("%d:Fname: '%s' does not exist in '%s'",
+                         ln, obj.Fname, self.ref_dir)
+            # Interpret Option
+            if Option == 'OLD':
+                # the file must exist when the MF is started
+                if Ftype.startswith('DATA') and not Fpath_exists:
+                    log.warn("%d:Option:%r, but file does not exist",
+                             ln, Option)
+            elif Option == 'REPLACE':
+                if Ftype.startswith('DATA') and Fpath_exists:
+                    log.debug("%d:Option:%r: file exists and will be replaced",
+                              ln, Option)
+            obj.NamOption = Option
             if isinstance(obj, _MFPackage):
-                setattr(self, obj._default_attrname, obj)
-        log.debug('finished reading %d lines', ln + 1)
+                setattr(self, obj._attr_name, obj)
+        log.debug('finished reading %d lines', ln)
         del log
         self._logger.info('reading data from %d packages', len(self))
         for name in self._packages:
