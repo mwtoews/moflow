@@ -4,13 +4,178 @@ Modflow module
 """
 
 import os
+import re
 import inspect
+import numpy as np
 
 from . import logger, logging
 
 
+class MFReaderError(Exception):
+    """MODFLOW file read error"""
+    def __init__(self, fp, message, *message_params):
+        """Requires MFFile obj and error message."""
+        if not isinstance(fp, _MFFileReader):
+            raise TypeError("'fp' is not a 'MFFile' object")
+        self.fp = fp
+        self.objname = self.fp.parent.__class__.__name__
+        self.message = message % message_params
+
+    def __str__(self):
+        """Return error message"""
+        return '%s:%s:%s:Data set %s:%s' % \
+            (self.objname, self.fp.fname, self.fp.lineno,
+             self.fp.data_set_num, self.message)
+
+
+class _MFFileReader(object):
+    """MODFLOW file reader"""
+
+    def __init__(self, parent):
+        """Initialize with parent _MFPackage. File is read from parent.fpath
+        property, which is typically a path to a filename, but can also be a
+        file reader object with a 'readlines' method, such as BytesIO."""
+        # Set up logger
+        self.logger = logging.getLogger(parent.__class__.__name__ + 'Reader')
+        self.logger.handlers = logger.handlers
+        self.logger.setLevel(logger.level)
+        if not isinstance(parent, _MFPackage):
+            raise ValueError("'parent' needs to be a _MFPackage object; found "
+                             + str(type(parent)))
+        self.parent = parent
+        if hasattr(self.parent.fpath, 'readlines'):
+            # it is a file reader object, e.g. BytesIO
+            self.fname = self.parent.fpath.__class__.__name__
+            self.lines = self.parent.fpath.readlines()
+        else:
+            self.fname = self.parent.fname
+            if self.fname is None:
+                self.fname = os.path.split(self.parent.fpath)[1]
+            # Read whole file at once, then close it
+            with open(self.parent.fpath, 'r') as fp:
+                self.lines = fp.readlines()
+        self.logger.info("read file '%s' with %d lines",
+                         self.fname, len(self.lines))
+        self.lineno = 0
+        self.data_set_num = 0
+
+    def __len__(self):
+        """Returns number of lines"""
+        return len(self.lines)
+
+    @property
+    def not_eof(self):
+        """Reader is not at the end of file (EOF)"""
+        return self.lineno < len(self.lines)
+
+    def next_line(self, data_set_num=None):
+        """Get next line and increment lineno.
+        Raises MFReaderError if the next line does not exist"""
+        self.data_set_num = data_set_num
+        self.lineno += 1
+        try:
+            line = self.lines[self.lineno - 1]
+        except IndexError:
+            self.lineno -= 1
+            raise MFReaderError(self, 'Unexpected end of file')
+        if len(line) > 199:
+            self.logger.warn('%d: line has %d characters',
+                             self.lineno, len(line))
+        return line
+
+    def get_named_items(self, data_set_num, names, fmt='s'):
+        """Get items into dict. See get_items for fmt usage"""
+        items = self.get_items(data_set_num, len(names), fmt=None)
+        if isinstance(fmt, str):
+            fmt = [fmt] * len(names)
+        res = {}
+        if isinstance(fmt, list):
+            assert len(fmt) == len(names), (len(fmt), len(names))
+            for name, item, f in zip(names, items, fmt):
+                res[name] = self.conv(item, f, name)
+        elif fmt is None:
+            for name, item in zip(names, items):
+                res[name] = item
+        else:
+            raise ValueError('Unknown case for fmt=' + repr(fmt))
+        return res
+
+    def conv(self, item, fmt, name=None):
+        """Helper function to convert item using a format fmt, raises
+        MFReaderError showing helpful info if data could not be converted.
+        The format code must be one of 'i' (integer), 'f' (any floating point),
+        or 's' (string). It could also be a numpy dtype."""
+        try:
+            if type(fmt) == np.dtype:
+                return fmt.type(item)
+            elif fmt == 's':  # string
+                return item
+            elif fmt == 'i':  # integer
+                return int(item)
+            elif fmt == 'f':  # any floating-point number
+                # typically either a REAL or DOUBLE PRECISION
+                return self.parent._float_type.type(item)
+            else:
+                raise ValueError('Unknown fmt code %r' % (fmt,))
+        except ValueError:
+            if name is not None:
+                msg = 'Cannot cast %s %r to type %r' % (name, item, fmt)
+            else:
+                msg = 'Cannot cast %r to type %r' % (item, fmt)
+            raise MFReaderError(self, msg)
+
+    def get_items(self, data_set_num=None, num_items=None, fmt='s'):
+        """Get items from one or more lines into list. If num_items is
+        defined, then only this count will be returned and any remaining
+        items from the line will be ignored.
+        If fmt is defined, it must be:
+         - 's' for string or no conversion (default)
+         - 'i' for integer
+         - 'f' for float, as defined by parent._float_type
+        Furthermore, it can be either one character or a list the same length
+        as num_items."""
+        if num_items is None:
+            items = self.next_line(data_set_num).split()
+        else:
+            assert isinstance(num_items, int), type(num_items)
+            assert num_items > 0, num_items
+            items = []
+            while len(items) < num_items:
+                items += self.next_line(data_set_num).split()
+            if len(items) > num_items:  # trim off too many
+                items = items[:num_items]
+        if isinstance(fmt, str):
+            res = [self.conv(x, fmt) for x in items]
+        elif isinstance(fmt, list):
+            assert len(fmt) == num_items, (len(fmt), num_items)
+            res = [self.conv(x, f) for x, f in zip(items, fmt)]
+        elif fmt is None:
+            res = items
+        else:
+            raise ValueError('Unknown case for fmt=' + repr(fmt))
+        return res
+
+    def read_named_items(self, data_set_num, names, fmt='s'):
+        """Read items into parent. See get_items for fmt usage"""
+        items = self.get_named_items(data_set_num, names, fmt)
+        for name in items.keys():
+            setattr(self.parent, name, items[name])
+
+    def read_text(self, data_set_num=0):
+        """Reads 0 or more text (comment) for lines that start with '#'"""
+        self.parent.text = []
+        line = self.next_line(data_set_num)
+        while line.startswith('#'):
+            line = line[1:].strip()
+            self.parent.text.append(line)
+            if not self.not_eof:
+                return
+            line = self.next_line(data_set_num)
+        self.lineno -= 1  # scroll back one
+
+
 class _MFPackage(object):
-    """The inherrited ___class__.__name__ is the Fname of the package, which
+    """The inherited ___class__.__name__ is the name of the package, which
     is always upper case and my have a version number following"""
 
     @property
@@ -42,62 +207,62 @@ class _MFPackage(object):
         setattr(self, '_parent', value)
 
     @property
-    def Nunit(self):
+    def nunit(self):
         """Nunit is the Fortran unit to be used when reading from or writing
         to the file. Any legal unit number on the computer being used can
         be specified except units 96-99. Unspecified is unit 0."""
-        return getattr(self, '_Nunit', 0)
+        return getattr(self, '_nunit', 0)
 
-    @Nunit.setter
-    def Nunit(self, value):
+    @nunit.setter
+    def nunit(self, value):
         if value is None:
             value = 0
         else:
             try:
                 value = int(value)
             except ValueError:
-                self._logger.error("Nunit: %r is not an integer", value)
+                self._logger.error("nunit: %r is not an integer", value)
         if value >= 96 and value <= 99:
-            self._logger.error("Nunit: %r is not valid", value)
-        setattr(self, '_Nunit', value)
+            self._logger.error("nunit: %r is not valid", value)
+        setattr(self, '_nunit', value)
 
     @property
-    def Fname(self):
+    def fname(self):
         """Fname is the name of the file, which is a character value.
-        Pathnames may be specified as part of Fname. However, space characters
-        are not allowed in Fname."""
-        return getattr(self, '_Fname', None)
+        Pathnames may be specified as part of fname. However, space characters
+        are not allowed in fname."""
+        return getattr(self, '_fname', None)
 
-    @Fname.setter
-    def Fname(self, value):
+    @fname.setter
+    def fname(self, value):
         if value is not None:
             if ' ' in value:
-                self._logger.warn("Fname: %d space characters found in %r",
+                self._logger.warn("fname: %d space characters found in %r",
                                   value.count(' '), value)
             if os.path.sep == '/':  # for reading on POSIX systems
                 if '\\' in value:
-                    self._logger.info(r"Fname: replacing '\' with '/' path "
+                    self._logger.info(r"fname: replacing '\' with '/' path "
                                       "separators to read file on host system")
                     value = value.replace('\\', '/')
-        self._Fname = value
+        self._fname = value
 
     @property
-    def NamOption(self):
-        """Returns 'Option' for Name File, which can be: OLD, REPLACE, UNKNOWN
+    def nam_option(self):
+        """Returns 'option' for Name File, which can be: OLD, REPLACE, UNKNOWN
         """
-        return getattr(self, '_NamOption', None)
+        return getattr(self, '_nam_option', None)
 
-    @NamOption.setter
-    def NamOption(self, value):
+    @nam_option.setter
+    def nam_option(self, value):
         if hasattr(value, 'upper') and value.upper() != value:
-            self._logger.info('NamOption: changing value from %r to %r',
+            self._logger.info('nam_option: changing value from %r to %r',
                               value, value.upper())
             value = value.upper()
         expected = [None, 'OLD', 'REPLACE', 'UNKNOWN']
         if value not in expected:
-            self._logger.error("NamOption: %r is not valid; expecting one of "
+            self._logger.error("nam_option: %r is not valid; expecting one of "
                                "%r", value, expected)
-        self._NamOption = value
+        self._nam_option = value
 
     def read(self, *args, **kwargs):
         raise NotImplementedError("'read' not implemented for " +
@@ -106,6 +271,9 @@ class _MFPackage(object):
     def write(self, *args, **kwargs):
         raise NotImplementedError("'write' not implemented for " +
                                   repr(self.__class__.__name__))
+
+    text = None
+    _float_type = np.dtype('f')  # REAL
 
     def __init__(self):
         """Package constructor"""
@@ -411,7 +579,7 @@ class Modflow(object):
     """Parent class for MODFLOW packages
 
     Each package can attach to this object as a lower-case attribute name
-    of the package Ftype.
+    of the package name.
 
     Example:
     >>> m = Modflow()
@@ -518,7 +686,7 @@ class Modflow(object):
         object.__delattr__(self, name)
 
     def append(self, package):
-        """Append a pacage to the end, usign a default attribute"""
+        """Append a package to the end, using a default attribute"""
         if not isinstance(package, _MFPackage):
             raise ValueError("value must be a _MFPackage-related object; "
                              "found " + repr(package.__class__))
@@ -553,7 +721,7 @@ class Modflow(object):
         log.handlers = logger.handlers
         log.setLevel(logger.level)
         self._packages = []
-        allNunit = {}  # check unique Nunit values
+        all_nunit = {}  # check unique Nunit values
         available_packages = _get_packages()
         Dch = {}  # directory cache
         for ln, line in enumerate(lines, start=1):
@@ -573,63 +741,63 @@ class Modflow(object):
                 raise ValueError(
                     'line %d has %d items, but 3 or 4 are expected' %
                     (ln, len(dat)))
-            Ftype, Nunit, Fname = dat[:3]
+            ftype, nunit, fname = dat[:3]
             if len(dat) >= 4:
-                Option = dat[3].upper()
+                option = dat[3].upper()
             else:
-                Option = None
+                option = None
             if len(dat) > 4:
                 log.info('%d: ignoring remaining items: %r', ln, dat[4:])
             # Ftype is the file type, which may be entered in all uppercase,
             # all lowercase, or any combination.
-            Ftype = Ftype.upper()
-            if Ftype.startswith('DATA'):
+            ftype = ftype.upper()
+            if ftype.startswith('DATA'):
                 obj = _MFData()
-            elif Ftype in available_packages:
-                obj = available_packages[Ftype]()
-                assert obj.__class__.__name__ == Ftype,\
-                    (obj.__class__.__name__, Ftype)
+            elif ftype in available_packages:
+                obj = available_packages[ftype]()
+                assert obj.__class__.__name__ == ftype,\
+                    (obj.__class__.__name__, ftype)
             else:
-                log.warn("%d:Ftype: %r not identified as a supported "
-                         "file type", ln, Ftype)
+                log.warn("%d:ftype: %r not identified as a supported "
+                         "file type", ln, ftype)
                 obj = _MFPackage()
             obj.parent = self  # set back-reference
-            obj.Nunit = Nunit
-            if obj.Nunit and obj.Nunit in allNunit:
-                log.warn("%d:Nunit: %r already assigned for %r",
-                         ln, allNunit[obj.Nunit])
+            obj.nunit = nunit
+            if obj.nunit and obj.nunit in all_nunit:
+                log.warn("%d:nunit: %r already assigned for %r",
+                         ln, all_nunit[obj.nunit])
             else:
-                allNunit[obj.Nunit] = Ftype
-            obj.Fname = Fname
-            obj.Fpath = os.path.join(self.ref_dir, obj.Fname)
-            Fpath_exists = os.path.isfile(obj.Fpath)
-            if not Fpath_exists:
-                testDir, testFname = os.path.split(obj.Fname)
+                all_nunit[obj.nunit] = ftype
+            obj.fname = fname
+            obj.fpath = os.path.join(self.ref_dir, obj.fname)
+            fpath_exists = os.path.isfile(obj.fpath)
+            if not fpath_exists:
+                testDir, test_fname = os.path.split(obj.fname)
                 pth = os.path.join(self.ref_dir, testDir)
                 if os.path.isdir(pth):
                     if pth not in Dch:
                         Dch[pth] = dict([(f.lower(), f) for f
                                          in os.listdir(pth)])
-                    testFname = testFname.lower()
-                    if testFname in Dch[pth]:
-                        Fpath_exists = True
-                        obj.Fname = os.path.join(testDir, Dch[pth][testFname])
-                        log.info("%d:Fname: changing to '%s'", ln, obj.Fname)
-                        obj.Fpath = os.path.join(pth, testFname)
-            if isinstance(obj, _MFPackage) and not Fpath_exists:
-                log.warn("%d:Fname: '%s' does not exist in '%s'",
-                         ln, obj.Fname, self.ref_dir)
-            # Interpret Option
-            if Option == 'OLD':
-                # the file must exist when the MF is started
-                if Ftype.startswith('DATA') and not Fpath_exists:
-                    log.warn("%d:Option:%r, but file does not exist",
-                             ln, Option)
-            elif Option == 'REPLACE':
-                if Ftype.startswith('DATA') and Fpath_exists:
-                    log.debug("%d:Option:%r: file exists and will be replaced",
-                              ln, Option)
-            obj.NamOption = Option
+                    test_fname = test_fname.lower()
+                    if test_fname in Dch[pth]:
+                        fpath_exists = True
+                        obj.fname = os.path.join(testDir, Dch[pth][test_fname])
+                        log.info("%d:fname: changing to '%s'", ln, obj.fname)
+                        obj.fpath = os.path.join(pth, test_fname)
+            if isinstance(obj, _MFPackage) and not fpath_exists:
+                log.warn("%d:fname: '%s' does not exist in '%s'",
+                         ln, obj.fname, self.ref_dir)
+            # Interpret option
+            if option == 'OLD':
+                # the file must exist when MODFLOW has started
+                if ftype.startswith('DATA') and not fpath_exists:
+                    log.warn("%d:option:%r, but file does not exist",
+                             ln, option)
+            elif option == 'REPLACE':
+                if ftype.startswith('DATA') and fpath_exists:
+                    log.debug("%d:option:%r: file exists and will be replaced",
+                              ln, option)
+            obj.nam_option = option
             if isinstance(obj, _MFPackage):
                 setattr(self, obj._attr_name, obj)
         log.debug('finished reading %d lines', ln)

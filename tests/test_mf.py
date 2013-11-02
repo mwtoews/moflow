@@ -1,6 +1,8 @@
 import os
 import sys
 from glob import glob
+from io import BytesIO
+from textwrap import dedent
 import unittest
 
 try:
@@ -17,9 +19,72 @@ except ImportError:
 #mf.logger.level = logging.ERROR
 
 
+class TEST(mf._MFPackage):
+    par1 = None
+    par2 = None
+
+
 class TestMF(unittest.TestCase):
 
+    def test_mf_reader_basic(self):
+        p = TEST()
+        p.fpath = BytesIO(dedent('''\
+            # A comment
+            100 ignore
+            200 -2.4E-12
+            4 500 FREE
+            -44 888.0
+            last line
+        '''))
+        r = mf._MFFileReader(p)
+        self.assertTrue(r.not_eof)
+        self.assertEqual(r.lineno, 0)
+        self.assertEqual(len(r), 6)
+        # Data Set 0: Text
+        r.read_text()
+        self.assertEqual(r.lineno, 1)
+        self.assertEqual(p.text, ['A comment'])
+        # Data Set 1: an item
+        self.assertEqual(r.get_items(1, 1, 'i'), [100])
+        self.assertEqual(r.lineno, 2)
+        # Data Set 2: two named items
+        self.assertRaises(mf.MFReaderError, r.read_named_items,
+                          2, ('par1', 'par2'), 'i')
+        r.lineno -= 1  # manually scroll back 1 line and try again
+        r.read_named_items(2, ('par1', 'par2'), ['i', 'f'])
+        self.assertEqual(p.par1, 200)
+        self.assertAlmostEqual(p.par2, -2.4E-12)
+        # Data Set 3: three named items
+        items = r.get_named_items(3, ['a', 'b', 'c'], ['f', 'i', 's'])
+        self.assertEqual(items, {'a': 4.0, 'b': 500, 'c': 'FREE'})
+        # Data Set 4: two named items
+        r.read_named_items(4, ['par1', 'par2'], ['i', 'f'])
+        self.assertEqual(p.par1, -44)
+        self.assertAlmostEqual(p.par2, 888.0)
+        # post-Data Set
+        self.assertTrue(r.not_eof)
+        self.assertEqual(r.next_line(), 'last line\n')
+        self.assertEqual(r.lineno, 6)
+        self.assertFalse(r.not_eof)
+        # Try to read past EOF
+        self.assertRaises(mf.MFReaderError, r.next_line)
+        self.assertEqual(r.lineno, 6)
+
+    def test_mf_reader_empty(self):
+        p = TEST()
+        p.fpath = BytesIO(dedent('''# Empty file'''))
+        r = mf._MFFileReader(p)
+        self.assertTrue(r.not_eof)
+        self.assertEqual(r.lineno, 0)
+        self.assertEqual(len(r), 1)
+        # Item 0: Text
+        r.read_text()
+        self.assertEqual(r.lineno, 1)
+        self.assertEqual(p.text, ['Empty file'])
+        self.assertFalse(r.not_eof)
+
     def test_basic_modflow(self):
+        # build Modflow object
         m = mf.Modflow()
         self.assertEqual(len(m), 0)
         self.assertEqual(list(m), [])
@@ -87,7 +152,6 @@ class TestMF(unittest.TestCase):
                 m = mf.Modflow()
                 m.read(nam)
                 print('%s: %s' % (os.path.basename(nam), ', '.join(list(m))))
-
 
 def test_suite():
     return unittest.TestLoader().loadTestsFromTestCase(TestMF)
