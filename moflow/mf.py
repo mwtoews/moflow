@@ -69,9 +69,13 @@ class _MFFileReader(object):
         return self.lineno < len(self.lines)
 
     def next_line(self, data_set_num=None):
-        """Get next line and increment lineno.
-        Raises MFReaderError if the next line does not exist"""
+        """Get next line, setting data set number and increment lineno.
+        Raises MFReaderError if the next line does not exist."""
         self.data_set_num = data_set_num
+        return self.readline()
+
+    def readline(self):
+        """Common file reading method, alias for next_line"""
         self.lineno += 1
         try:
             line = self.lines[self.lineno - 1]
@@ -134,14 +138,15 @@ class _MFFileReader(object):
          - 'f' for float, as defined by parent._float_type
         Furthermore, it can be either one character or a list the same length
         as num_items."""
+        self.data_set_num = data_set_num
         if num_items is None:
-            items = self.next_line(data_set_num).split()
+            items = self.readline().split()
         else:
             assert isinstance(num_items, int), type(num_items)
             assert num_items > 0, num_items
             items = []
             while len(items) < num_items:
-                items += self.next_line(data_set_num).split()
+                items += self.readline().split()
             if len(items) > num_items:  # trim off too many
                 items = items[:num_items]
         if isinstance(fmt, str):
@@ -170,8 +175,169 @@ class _MFFileReader(object):
             self.parent.text.append(line)
             if not self.not_eof:
                 return
-            line = self.next_line(data_set_num)
+            line = self.readline()
         self.lineno -= 1  # scroll back one
+
+    def get_array(self, data_set_num, shape, dtype):
+        """Returns dict of array data and attributes, similar to array reading
+        utilities U2DREL, U2DINT, and U1DREL
+
+        Inputs:
+            data_set_num - number
+            shape - 1D array, e.g. 10, or 2D array (20, 30)
+            dtype - e.g. np.float32 or 'f'
+
+        See Page 8-57 from the MODFLOW-2005 mannual for details.
+        """
+        res = dict()
+        first_line = self.next_line(data_set_num)
+        # Comments are considered after a '#' character on the first line
+        if '#' in first_line:
+            res['text'] = first_line[(first_line.find('#') + 1):].strip()
+        num_type = np.dtype(dtype).type
+        res['array'] = ar = np.empty(shape, dtype=dtype)
+        num_items = ar.size
+
+        def read_array_data(obj, fmtin):
+            '''Helper subroutine to actually read array data'''
+            assert fmtin.startswith('(') and fmtin.endswith(')'), fmtin
+            if fmtin == '(BINARY)':
+                data_size = ar.size * ar.dtype.itemsize
+                if hasattr(obj, 'read'):
+                    data = obj.read(data_size)
+                else:
+                    raise NotImplementedError(
+                        "not sure how to 'read' from " + repr(obj))
+                iar = np.fromstring(data, dtype)
+            else:  # ASCII
+                items = []
+                if not hasattr(obj, 'readline'):
+                    raise NotImplementedError(
+                        "not sure how to 'readline' from " + repr(obj))
+                if fmtin == '(FREE)':
+                    while len(items) < num_items:
+                        items += obj.readline().split()
+                else:  # interpret Fortran format
+                    fmt = re.findall(
+                        r'\((\d*)([IEFG][SN]?)(\d+)(\.(\d+))?\)', fmtin)
+                    if len(fmt) != 1 or ',' in fmtin:
+                        raise MFReaderError(
+                            self, 'Cannot understand Fortran format: %r',
+                            fmtin)
+                    r = fmt[0]
+                    if r[0].isdigit():
+                        num = int(r[0])
+                    else:
+                        num = 1
+                    width = int(r[2])
+                    while len(items) < num_items:
+                        line = obj.readline()
+                        pos = 0
+                        for n in range(num):
+                            try:
+                                item = line[pos:pos + width].strip()
+                                pos += width
+                                if item:
+                                    items.append(item)
+                            except IndexError:
+                                break
+                iar = np.fromiter(items, dtype=dtype)
+            if iar.size != ar.size:
+                raise MFReaderError(
+                    self, 'Expected size %s, but found %s',
+                    ar.size, iar.size)
+            return iar
+
+        # First, assume using more modern free-format control line
+        control_line = first_line
+        dat = control_line.split()
+        # First item is the control word
+        res['cntrl'] = cntrl = dat[0].upper()
+        if cntrl == 'CONSTANT':
+            # CONSTANT CNSTNT
+            if len(dat) < 2:
+                raise MFReaderError(
+                    self, 'Expecting to find at least 2 items; found %d',
+                    len(dat))
+            res['cnstnt'] = cnstnt = dat[1]
+            if len(dat) > 2 and 'text' not in res:
+                st = first_line.find(cnstnt) + len(cnstnt)
+                res['text'] = first_line[st:].strip()
+            ar.fill(cnstnt)
+        elif cntrl == 'INTERNAL':
+            # INTERNAL CNSTNT FMTIN IPRN
+            if len(dat) < 4:
+                raise MFReaderError(
+                    self, 'Expecting to find at least 4 items; found %d',
+                    len(dat))
+            res['cnstnt'] = cnstnt = dat[1]
+            res['fmtin'] = fmtin = dat[2]
+            res['iprn'] = iprn = dat[3]  # not used
+            if len(dat) > 4 and 'text' not in res:
+                st = first_line.find(iprn, first_line.find(fmtin)) + len(iprn)
+                res['text'] = first_line[st:].strip()
+            iar = read_array_data(self, fmtin)
+            ar[:] = iar.reshape(shape) * num_type(cnstnt)
+        elif cntrl == 'EXTERNAL':
+            # EXTERNAL Nunit CNSTNT FMTIN IPRN
+            if len(dat) < 5:
+                raise MFReaderError(
+                    self, 'Expecting to find at least 5 items; found %d',
+                    len(dat))
+            res['nunit'] = nunit = int(dat[1])
+            res['cnstnt'] = cnstnt = dat[2]
+            res['fmtin'] = fmtin = dat[3].upper()
+            res['iprn'] = iprn = dat[4]  # not used
+            if len(dat) > 5 and 'text' not in res:
+                st = first_line.find(iprn, first_line.find(fmtin)) + len(iprn)
+                res['text'] = first_line[st:].strip()
+            obj = self.parent.nam[nunit]
+            iar = read_array_data(obj, fmtin)
+            ar[:] = iar.reshape(shape) * num_type(cnstnt)
+        elif cntrl == 'OPEN/CLOSE':
+            # OPEN/CLOSE FNAME CNSTNT FMTIN IPRN
+            if len(dat) < 5:
+                raise MFReaderError(self,
+                                    'Expecting to find at least five items')
+            res['fname'] = fname = dat[1]
+            res['cnstnt'] = cnstnt = dat[2]
+            res['fmtin'] = fmtin = dat[3].upper()
+            res['iprn'] = iprn = dat[4]  # not used
+            if len(dat) > 5 and 'text' not in res:
+                st = first_line.find(iprn, first_line.find(fmtin)) + len(iprn)
+                res['text'] = first_line[st:].strip()
+            with open(fname, 'rb') as fp:
+                iar = read_array_data(fp, fmtin)
+            ar[:] = iar.reshape(shape) * num_type(cnstnt)
+        elif len(control_line) >= 50:  # FIXED-FORMAT CONTROL LINE
+            # LOCAT CNSTNT FMTIN IPRN
+            del res['cntrl']  # control word was not used for fixed-format
+            try:
+                res['locat'] = locat = int(control_line[0:10])
+                res['cnstnt'] = cnstnt = control_line[10:20].strip()
+                res['fmtin'] = fmtin = control_line[20:40].strip().upper()
+                res['iprn'] = iprn = control_line[40:50].strip()
+            except ValueError:
+                raise MFReaderError(self, 'fixed-format control line not '
+                                    'understood: %r', control_line)
+            if len(control_line) > 50 and 'text' not in res:
+                res['text'] = first_line[50:].strip()
+            if locat == 0:  # all elements are set equal to cnstnt
+                ar.fill(cnstnt)
+            else:
+                nunit = abs(locat)
+                if self.parent.nunit == nunit:
+                    obj = self
+                else:
+                    obj = self.parent.nam[nunit]
+                if locat < 0:
+                    fmtin = '(BINARY)'
+                iar = read_array_data(obj, fmtin)
+                ar[:] = iar.reshape(shape) * num_type(cnstnt)
+        else:
+            raise MFReaderError(self, 'array control line not understood: %r',
+                                control_line)
+        return res
 
 
 class _MFPackage(object):
@@ -187,24 +353,24 @@ class _MFPackage(object):
     @property
     def _default_fname(self):
         """Generate default filename"""
-        if self.parent is None:
-            raise AttributeError("'parent' not set to a Modflow object")
-        prefix = self.parent.prefix
+        if self.nam is None:
+            raise AttributeError("'nam' not set to a Modflow object")
+        prefix = self.nam.prefix
         if prefix is None:
-            raise ValueError("'parent.prefix' is not set")
+            raise ValueError("'nam.prefix' is not set")
         return prefix + '.' + self._attr_name
 
     @property
-    def parent(self):
-        """Returns back-reference to Modflow object"""
-        return getattr(self, '_parent', None)
+    def nam(self):
+        """Returns back-reference to nam or Modflow object"""
+        return getattr(self, '_nam', None)
 
-    @parent.setter
-    def parent(self, value):
+    @nam.setter
+    def nam(self, value):
         if value is not None and not isinstance(value, Modflow):
-            raise ValueError("'parent' needs to be a Modflow object; found "
+            raise ValueError("'nam' needs to be a Modflow object; found "
                              + str(type(value)))
-        setattr(self, '_parent', value)
+        setattr(self, '_nam', value)
 
     @property
     def nunit(self):
@@ -576,7 +742,7 @@ def _get_packages():
 
 
 class Modflow(object):
-    """Parent class for MODFLOW packages
+    """Base class for MODFLOW packages, based on Name File (nam)
 
     Each package can attach to this object as a lower-case attribute name
     of the package name.
@@ -590,12 +756,12 @@ class Modflow(object):
     @property
     def ref_dir(self):
         """Returns reference directory for MODFLOW files"""
-        return getattr(self, '_ref_dir', os.getcwd())
+        return getattr(self, '_ref_dir', '')
 
     @ref_dir.setter
     def ref_dir(self, value):
         path = str(value)
-        if not os.path.isdir(path):
+        if path and not os.path.isdir(path):
             self._logger.error("'ref_dir' is not a directory: '%s'", path)
         setattr(self, '_ref_dir', path)
 
@@ -615,6 +781,7 @@ class Modflow(object):
 
     _logger = None
     _packages = None  # _MFPackage objects
+    _nunit = None  # keys are integer nunit of either fpath str or file object
     data = None  # _MFData objects
 
     def __init__(self, *args, **kwargs):
@@ -624,6 +791,7 @@ class Modflow(object):
         self._logger.handlers = logger.handlers
         self._logger.setLevel(logger.level)
         self._packages = []
+        self._nunit = {}
         self.data = {}
         if args:
             self._logger.error("'args' do nothing at the moment: %r", args)
@@ -634,12 +802,20 @@ class Modflow(object):
         """Representation of Modflow object, showing packages"""
         return '<%s: %s>' % (self.__class__.__name__, ', '.join(list(self)))
 
+    def __getitem__(self, key):
+        """Return package or data using nunit integer"""
+        return self._nunit[key]
+
+    def __setitem__(self, key, value):
+        """Set package or data with nunit integer"""
+        self._nunit[key] = value
+
     def __len__(self):
-        """Returns number of packages"""
+        """Returns number of packages, but not data or nunit items"""
         return len(self._packages)
 
     def __iter__(self):
-        """Allow iteration through sequence of packages"""
+        """Allow iteration through sequence of packages, but not data"""
         return iter(self._packages)
 
     def __setattr__(self, name, value):
@@ -695,6 +871,16 @@ class Modflow(object):
             raise ValueError(
                 "attribute %r already exists; use setattr to replace" % name)
         setattr(self, name, package)
+        if package.nam is None:
+            package.nam = self
+        elif package.nam is self:
+            self._logger.debug('%s.nam already set', name)
+        else:
+            self._logger.error(
+                "not setting %s.nam, since it is already assigned to %r",
+                name, package.nam)
+        if package.nunit:
+            self[package.nunit] = package
 
     def read(self, fname, **kwargs):
         """Read a MODFLOW simulation from a Name File (with *.nam extension)
@@ -703,6 +889,9 @@ class Modflow(object):
         other files referenced in the Name File, otherwise it is assumed
         to be relative to the same as the Name File.
         """
+        self._packages = []
+        self._nunit = {}
+        self.data = {}
         self._logger.info('reading Name File: %s', fname)
         with open(fname, 'r') as fp:
             lines = fp.readlines()
@@ -721,7 +910,6 @@ class Modflow(object):
         log.handlers = logger.handlers
         log.setLevel(logger.level)
         self._packages = []
-        all_nunit = {}  # check unique Nunit values
         available_packages = _get_packages()
         Dch = {}  # directory cache
         for ln, line in enumerate(lines, start=1):
@@ -761,13 +949,14 @@ class Modflow(object):
                 log.warn("%d:ftype: %r not identified as a supported "
                          "file type", ln, ftype)
                 obj = _MFPackage()
-            obj.parent = self  # set back-reference
-            obj.nunit = nunit
-            if obj.nunit and obj.nunit in all_nunit:
-                log.warn("%d:nunit: %r already assigned for %r",
-                         ln, all_nunit[obj.nunit])
-            else:
-                all_nunit[obj.nunit] = ftype
+            # set back-references for NameFile and Nunit
+            obj.nam = self
+            obj.nunit = nunit = int(nunit)
+            try:
+                self[nunit] = obj
+            except KeyError:
+                log.warn("%d:nunit: %s already assigned for %r",
+                         ln, nunit, self[nunit].__class__.__name__)
             obj.fname = fname
             obj.fpath = os.path.join(self.ref_dir, obj.fname)
             fpath_exists = os.path.isfile(obj.fpath)
