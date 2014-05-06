@@ -9,8 +9,9 @@ __email__ = 'mwtoews@gmail.com'
 # set up a global logger
 import logging
 logger = logging.getLogger('moflow')
-formatter = logging.Formatter(logging.BASIC_FORMAT)
-handler = logging.StreamHandler()
-handler.setFormatter(formatter)
-logger.handlers = [handler]
-del formatter, handler
+if __name__ not in [x.name for x in logger.handlers]:
+    formatter = logging.Formatter(logging.BASIC_FORMAT)
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    del formatter, handler
