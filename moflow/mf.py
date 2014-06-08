@@ -5,45 +5,31 @@ Modflow module
 
 import os
 import re
+import sys
 import inspect
 import numpy as np
 
+try:
+    import h5py
+except ImportError:
+    h5py = None
+
 from . import logger, logging
-
-
-class MFReaderError(Exception):
-    """MODFLOW file read error"""
-    def __init__(self, fp, msg, *args):
-        """Requires MFFile obj and error message."""
-        if not isinstance(fp, _MFFileReader):
-            raise TypeError("'fp' is not a '_MFFileReader' object")
-        self.fp = fp
-        self.objname = self.fp.parent.__class__.__name__
-        self.msg = msg % args
-
-    def __str__(self):
-        """Return error message"""
-        return '%s:%s:%s:Data set %s:%s' % \
-            (self.objname, self.fp.fname, self.fp.lineno,
-             self.fp.data_set_num, self.msg)
 
 
 _re_fmtin = re.compile(
     r'\((?P<body>(?P<rep>\d*)(?P<symbol>[IEFG][SN]?)(?P<w>\d+)(\.(?P<d>\d+))?'
     r'|FREE|BINARY)\)')
 
+
 class _MFFileReader(object):
     """MODFLOW file reader"""
 
-    def __init__(self, parent, f=None):
+    def __init__(self, f=None, parent=None):
         """Initialize with parent _MFPackage. File is read from 'f' argument,
         if not None, which is typically a path to a filename, but can also be
         a file reader object with a 'readlines' method, such as BytesIO. If
         'f' is None, then it is obtained from parent.fpath, or parent.fname"""
-        # Set up logger
-        self.logger = logging.getLogger(parent.__class__.__name__ + 'Reader')
-        self.logger.handlers = logger.handlers
-        self.logger.setLevel(logger.level)
         if not isinstance(parent, _MFPackage):
             raise ValueError("'parent' needs to be a _MFPackage object; found "
                              + str(type(parent)))
@@ -67,6 +53,11 @@ class _MFFileReader(object):
             # Read whole file at once, then close it
             with open(self.parent.fpath, 'r') as fp:
                 self.lines = fp.readlines()
+        # Set up logger
+        #name = os.path.dirname(f)
+        self.logger = logging.getLogger(self.fname)
+        self.logger.handlers = logger.handlers
+        self.logger.setLevel(logger.level)
         self.logger.info("read file '%s' with %d lines",
                          self.fname, len(self.lines))
         self.lineno = 0
@@ -76,14 +67,34 @@ class _MFFileReader(object):
         """Returns number of lines"""
         return len(self.lines)
 
+    def location_info(self):
+        """Helper function to be used with exceptions"""
+        return '%s:%s:%s:Data set %s' % \
+            (self.parent.__class__.__name__, self.fname, self.lineno,
+             self.data_set_num)
+
+    def check_end(self):
+        """Check end of file and show messages in logger on status"""
+        if len(self) == self.lineno:
+            self.logger.info("finished reading %d lines", self.lineno)
+        elif len(self) > self.lineno:
+            remain = len(self) - self.lineno
+            a, b = 's', ''
+            if remain == 1:
+                b, a = a, b
+            self.logger.warn(
+                "finished reading %d lines, but %d line%s remain%s",
+                self.lineno, remain, a, b)
+        else:
+            raise ValueError("%d > %d ?" % (self.lineno, len(self)))
+
     @property
     def not_eof(self):
         """Reader is not at the end of file (EOF)"""
         return self.lineno < len(self.lines)
 
     def next_line(self, data_set_num=None):
-        """Get next line, setting data set number and increment lineno.
-        Raises MFReaderError if the next line does not exist."""
+        """Get next line, setting data set number and increment lineno"""
         self.data_set_num = data_set_num
         return self.readline()
 
@@ -94,7 +105,7 @@ class _MFFileReader(object):
             line = self.lines[self.lineno - 1]
         except IndexError:
             self.lineno -= 1
-            raise MFReaderError(self, 'Unexpected end of file')
+            raise IndexError('unexpected end of file')
         #if len(line) > 199:
         #    self.logger.warn('%s:%d: line has %d characters',
         #                     self.fname, self.lineno, len(line))
@@ -111,8 +122,8 @@ class _MFFileReader(object):
         return res
 
     def conv(self, item, fmt, name=None):
-        """Helper function to convert item using a format fmt, raises
-        MFReaderError showing helpful info if data could not be converted.
+        """Helper function to convert item using a format fmt
+
         The format code must be one of 'i' (integer), 'f' (any floating point),
         or 's' (string). It could also be a numpy dtype."""
         try:
@@ -132,7 +143,7 @@ class _MFFileReader(object):
                 msg = 'Cannot cast %r of %r to type %r' % (name, item, fmt)
             else:
                 msg = 'Cannot cast %r to type %r' % (item, fmt)
-            raise MFReaderError(self, msg)
+            raise ValueError(msg)
 
     def get_items(self, data_set_num=None, num_items=None, fmt='s',
                   multiline=False):
@@ -240,8 +251,8 @@ class _MFFileReader(object):
             '''Helper subroutine to actually read array data'''
             fmt = _re_fmtin.search(fmtin.upper())
             if not fmt:
-                raise MFReaderError(
-                    self, 'Cannot understand Fortran format: %r', fmtin)
+                raise ValueError(
+                    'cannot understand Fortran format: ' + repr(fmtin))
             fmt = fmt.groupdict()
             if fmt['body'] == 'BINARY':
                 data_size = ar.size * ar.dtype.itemsize
@@ -278,9 +289,8 @@ class _MFFileReader(object):
                                 break
                 iar = np.fromiter(items, dtype=dtype)
             if iar.size != ar.size:
-                raise MFReaderError(
-                    self, 'Expected size %s, but found %s',
-                    ar.size, iar.size)
+                raise ValueError('expected size %s, but found %s' %
+                                 (ar.size, iar.size))
             return iar
 
         # First, assume using more modern free-format control line
@@ -291,9 +301,8 @@ class _MFFileReader(object):
         if cntrl == 'CONSTANT':
             # CONSTANT CNSTNT
             if len(dat) < 2:
-                raise MFReaderError(
-                    self, 'Expecting to find at least 2 items; found %d',
-                    len(dat))
+                raise ValueError(
+                    'expecting to find at least 2 items for CONSTANT')
             res['cnstnt'] = cnstnt = dat[1]
             if len(dat) > 2 and 'text' not in res:
                 st = first_line.find(cnstnt) + len(cnstnt)
@@ -302,9 +311,8 @@ class _MFFileReader(object):
         elif cntrl == 'INTERNAL':
             # INTERNAL CNSTNT FMTIN [IPRN]
             if len(dat) < 3:
-                raise MFReaderError(
-                    self, 'Expecting to find at least 3 items; found %d',
-                    len(dat))
+                raise ValueError(
+                    'expecting to find at least 3 items for INTERNAL')
             res['cnstnt'] = cnstnt = dat[1]
             res['fmtin'] = fmtin = dat[2]
             if len(dat) >= 4:
@@ -317,9 +325,8 @@ class _MFFileReader(object):
         elif cntrl == 'EXTERNAL':
             # EXTERNAL Nunit CNSTNT FMTIN IPRN
             if len(dat) < 5:
-                raise MFReaderError(
-                    self, 'Expecting to find at least 5 items; found %d',
-                    len(dat))
+                raise ValueError(
+                    'expecting to find at least 5 items for EXTERNAL')
             res['nunit'] = nunit = int(dat[1])
             res['cnstnt'] = cnstnt = dat[2]
             res['fmtin'] = fmtin = dat[3].upper()
@@ -329,30 +336,85 @@ class _MFFileReader(object):
                 res['text'] = first_line[st:].strip()
             # Needs a reference to nam[nunit]
             if self.parent.nam is None:
-                raise MFReaderError(
-                    self, "Reference to 'nam' required for EXTERNAL array")
+                raise AttributeError(
+                    "reference to 'nam' required for EXTERNAL array")
             try:
                 obj = self.parent.nam[nunit]
             except KeyError:
-                raise MFReaderError(
-                    self, "nunit %s not in nam", nunit)
+                raise KeyError("nunit %s not in nam", nunit)
             iar = read_array_data(obj, fmtin)
             ar[:] = iar.reshape(shape) * num_type(cnstnt)
         elif cntrl == 'OPEN/CLOSE':
             # OPEN/CLOSE FNAME CNSTNT FMTIN IPRN
             if len(dat) < 5:
-                raise MFReaderError(self,
-                                    'Expecting to find at least five items')
+                raise ValueError(
+                    'expecting to find at least 5 items for OPEN/CLOSE')
             res['fname'] = fname = dat[1]
             res['cnstnt'] = cnstnt = dat[2]
             res['fmtin'] = fmtin = dat[3].upper()
-            res['iprn'] = iprn = dat[4]  # not used
+            res['iprn'] = iprn = dat[4]
             if len(dat) > 5 and 'text' not in res:
                 st = first_line.find(iprn, first_line.find(fmtin)) + len(iprn)
                 res['text'] = first_line[st:].strip()
             with open(fname, 'rb') as fp:
                 iar = read_array_data(fp, fmtin)
             ar[:] = iar.reshape(shape) * num_type(cnstnt)
+        elif cntrl == 'HDF5':
+            # GMS extension: http://www.xmswiki.com/xms/GMS:MODFLOW_with_HDF5
+            if not h5py:
+                raise ImportError('h5py module required to read HDF5 data')
+            # HDF5 CNSTNT IPRN "FNAME" "pathInFile" nDim start1 nToRead1 ...
+            file_ch = r'\w/\.\-\+_\(\)'
+            dat = re.findall('([' + file_ch + ']+|"[' + file_ch + ' ]+")',
+                             control_line)
+            if len(dat) < 8:
+                raise ValueError('expecting to find at least 8 '
+                                 'items for HDF5; found ' + str(len(dat)))
+            assert dat[0].upper() == 'HDF5', dat[0]
+            res['cnstnt'] = cnstnt = dat[1]
+            try:
+                cnstnt_val = num_type(cnstnt)
+            except ValueError:  # e.g. 1.0 as int 1
+                cnstnt_val = num_type(float(cnstnt))
+            res['iprn'] = dat[2]
+            res['fname'] = fname = dat[3].strip('"')
+            res['pathInFile'] = pathInFile = dat[4].strip('"')
+            nDim = int(dat[5])
+            nDim_len = {1: 8, 2: 10, 3: 12}
+            if nDim not in nDim_len:
+                raise ValueError('expecting to nDim to be one of 1, 2, or 3; '
+                                 'found ' + str(nDim))
+            elif len(dat) < nDim_len[nDim]:
+                raise ValueError(
+                    ('expecting to find at least %d items for HDF5 with '
+                     '%d dimensions; found %d') %
+                    (nDim_len[nDim], nDim, len(dat)))
+            elif len(dat) > nDim_len[nDim]:
+                token = dat[nDim_len[nDim]]
+                st = first_line.find(token) + len(token)
+                res['text'] = first_line[st:].strip()
+            if nDim >= 1:
+                start1, nToRead1 = int(dat[6]), int(dat[7])
+                slice1 = slice(start1, start1 + nToRead1)
+            if nDim >= 2:
+                start2, nToRead2 = int(dat[8]), int(dat[9])
+                slice2 = slice(start2, start2 + nToRead2)
+            if nDim == 3:
+                start3, nToRead3 = int(dat[10]), int(dat[11])
+                slice3 = slice(start3, start3 + nToRead3)
+            fpath = os.path.join(self.parent.nam.ref_dir, fname)
+            if not os.path.isfile(fpath):
+                raise IOError("cannot find file '%s'" % (fpath,))
+            h5 = h5py.File(fpath, 'r')
+            ds = h5[pathInFile]
+            if nDim == 1:
+                iar = ds[slice1]
+            elif nDim == 2:
+                iar = ds[slice1, slice2]
+            elif nDim == 3:
+                iar = ds[slice1, slice2, slice3]
+            h5.close()
+            ar[:] = iar.reshape(shape) * cnstnt_val
         elif len(control_line) > 20:  # FIXED-FORMAT CONTROL LINE
             # LOCAT CNSTNT FMTIN IPRN
             del res['cntrl']  # control word was not used for fixed-format
@@ -364,8 +426,8 @@ class _MFFileReader(object):
                 if len(control_line) > 40:
                     res['iprn'] = iprn = control_line[40:50].strip()
             except ValueError:
-                raise MFReaderError(self, 'fixed-format control line not '
-                                    'understood: %r', control_line)
+                raise ValueError('fixed-format control line not '
+                                 'understood: ' + repr(control_line))
             if len(control_line) > 50 and 'text' not in res:
                 res['text'] = first_line[50:].strip()
             if locat == 0:  # all elements are set equal to cnstnt
@@ -383,8 +445,8 @@ class _MFFileReader(object):
                 iar = read_array_data(obj, fmtin)
                 ar[:] = iar.reshape(shape) * num_type(cnstnt)
         else:
-            raise MFReaderError(self, 'array control line not understood: %r',
-                                control_line)
+            raise ValueError('array control line not understood: ' +
+                             repr(control_line))
         if return_dict:
             return res
         else:
@@ -518,6 +580,10 @@ class _MFPackage(object):
         if kwargs:
             self._logger.warn('unused kwargs: %r', kwargs)
 
+    def __repr__(self):
+        """Returns string representation"""
+        return '<' + self.__class__.__name__ + '>'
+
     def read(self, *args, **kwargs):
         raise NotImplementedError("'read' not implemented for " +
                                   repr(self.__class__.__name__))
@@ -526,7 +592,7 @@ class _MFPackage(object):
         raise NotImplementedError("'write' not implemented for " +
                                   repr(self.__class__.__name__))
 
-    def _setup_read(self, f):
+    def _setup_read(self):
         """Hook to set-up attributes"""
         pass
 
@@ -574,9 +640,14 @@ class _MFPackageDIS(_MFPackage):
                                    'match those established in this package '
                                    '(%s)', disu.nper, stress_period)
 
-    def _setup_read(self, f):
+    @property
+    def nper(self):
+        """Number of stress periods in the simulation"""
+        return self._dis and self._dis.nper or self._disu and self._disu.nper
+
+    def _setup_read(self):
         """Hook to set-up and check attributes"""
-        _MFPackage._setup_read(self, f)
+        _MFPackage._setup_read(self)
         if self.dis is None and self.disu is None:
             raise AttributeError("'dis' or 'disu' is not set")
 
@@ -683,14 +754,14 @@ class _DIS(_MFPackage):
         try:
             return self._lenuni_str[self.lenuni]
         except KeyError:
-            raise ValueError("Bad value of 'lenuni': " + repr(self.lenuni))
+            raise ValueError("invalid 'lenuni': " + repr(self.lenuni))
 
     @lenuni_str.setter
     def lenuni_str(self, value):
         try:
             self.lenuni = self._str_lenuni[value]
         except KeyError:
-            raise ValueError("Bad value of 'lenuni_str': " + repr(value))
+            raise ValueError("invalid 'lenuni_str': " + repr(value))
 
     def _read_stress_period_data(self, fp, data_set_num):
         # PERLEN NSTP TSMULT Ss/tr
@@ -827,39 +898,48 @@ class DIS(_DIS):
                 top_left_Y,  # top left y
                 0.0, -dy)  # rotation, n-s pixel resolution
 
+    def __repr__(self):
+        return '<%s: nper=%s, nlay=%s, nrow=%s, ncol=%s>' %\
+            (self.__class__.__name__, self.nper, self.nlay, self.nrow,
+             self.ncol)
+
     def read(self, fpath=None):
         """Read DIS file"""
-        fp = _MFFileReader(self, fpath)
-        # 0: [#Text]
-        fp.read_text(0)
-        # 1: NLAY NROW NCOL NPER ITMUNI LENUNI
-        fp.read_named_items(1, ['nlay', 'nrow', 'ncol', 'nper',
-                                'itmuni', 'lenuni'], 'i')
-        # 2: LAYCBD(NLAY)
-        dat = fp.get_items(2, num_items=self.nlay, multiline=True)
-        self.laycbd = [int(x) for x in dat]
-        if self.nlay > 1 and self.laycbd[-1]:
-            self._logger.error("%d: LAYCBD for the bottom layer must be 0; "
-                               'found %s', fp.lineno, dat[-1])
-        # 3: DELR(NCOL) - U1DREL
-        self.delr = fp.get_array(3, self.ncol, self._float_type)
-        # 4: DELC(NROW) - U1DREL
-        self.delc = fp.get_array(4, self.nrow, self._float_type)
-        # 5: Top(NCOL,NROW) - U2DREL
-        self.top = fp.get_array(5, (self.ncol, self.nrow),
-                                self._float_type).T
-        # 6: BOTM(NCOL,NROW) - U2DREL
-        ## for each model layer and Quasi-3D confining bed
-        num_botm = self.nlay
-        if self.nlay > 1:
-            num_botm += sum(self.laycbd)
-        self.botm = np.empty((num_botm,) + self.shape2d, self._float_type)
-        for ibot in range(num_botm):
-            self.botm[ibot, :, :] = fp.get_array(6, (self.ncol, self.nrow),
-                                                 self._float_type).T
-        ## FOR EACH STRESS PERIOD
-        # 7: PERLEN NSTP TSMULT Ss/tr
-        self._read_stress_period_data(fp, 7)
+        fp = _MFFileReader(fpath, self)
+        try:
+            # 0: [#Text]
+            fp.read_text(0)
+            # 1: NLAY NROW NCOL NPER ITMUNI LENUNI
+            fp.read_named_items(1, ['nlay', 'nrow', 'ncol', 'nper',
+                                    'itmuni', 'lenuni'], 'i')
+            # 2: LAYCBD(NLAY)
+            dat = fp.get_items(2, num_items=self.nlay, multiline=True)
+            self.laycbd = [int(x) for x in dat]
+            if self.nlay > 1 and self.laycbd[-1]:
+                self._logger.error("%d: LAYCBD for the bottom layer must be 0;"
+                                   ' found %s', fp.lineno, dat[-1])
+            # 3: DELR(NCOL) - U1DREL
+            self.delr = fp.get_array(3, self.ncol, self._float_type)
+            # 4: DELC(NROW) - U1DREL
+            self.delc = fp.get_array(4, self.nrow, self._float_type)
+            # 5: Top(NCOL,NROW) - U2DREL
+            self.top = fp.get_array(5, self.shape2d, self._float_type)
+            # 6: BOTM(NCOL,NROW) - U2DREL
+            ## for each model layer and Quasi-3D confining bed
+            num_botm = self.nlay
+            if self.nlay > 1:
+                num_botm += sum(self.laycbd)
+            self.botm = np.empty((num_botm,) + self.shape2d, self._float_type)
+            for ibot in range(num_botm):
+                self.botm[ibot, :, :] = \
+                    fp.get_array(6, self.shape2d, self._float_type)
+            ## FOR EACH STRESS PERIOD
+            # 7: PERLEN NSTP TSMULT Ss/tr
+            self._read_stress_period_data(fp, 7)
+            fp.check_end()
+        except Exception as e:
+            raise type(e), type(e)(fp.location_info() + ':' + str(e.message)),\
+                sys.exc_info()[2]
 
 
 class DISU(_DIS):
@@ -945,49 +1025,63 @@ class DISU(_DIS):
             raise ValueError("invalid 'idsymrd: must be 0, or 1")
         setattr(self, '_idsymrd', value)
 
+    def __repr__(self):
+        return '<%s: nper=%s, nlay=%s, nodes=%s, njag=%s>' %\
+            (self.__class__.__name__, self.nper, self.nlay, self.nodes,
+             self.njag)
+
     def read(self, fpath=None):
         """Read DISU file"""
-        fp = _MFFileReader(self, fpath)
-        # 0: [#Text]
-        fp.read_text(0)
-        # 1: NODES NLAY NJAG IVSD NPER ITMUNI LENUNI IDSYMRD
-        fp.read_named_items(1, ['nodes', 'nlay', 'njag', 'ivsd', 'nper',
-                                'itmuni', 'lenuni', 'idsymrd'], 'i')
-        # 2: LAYCBD(NLAY)
-        dat = fp.get_items(2, num_items=self.nlay, multiline=True)
-        self.laycbd = [int(x) for x in dat]
-        if self.nlay > 1 and self.laycbd[-1]:
-            self._logger.error("%d: LAYCBD for the bottom layer must be 0; "
-                               'found %s', fp.lineno, dat[-1])
-        # 3: NODELAY(NLAY) - U1DINT
-        self.Nodelay = fp.get_array(3, self.nlay, 'i')
-        # 4: Top(NDSLAY) - U1DREL
-        self.Top = fp.get_array(4, self.ndslay, self._float_type)
-        # 5: Bot(NDSLAY) - U1DREL
-        self.Bot = fp.get_array(5, self.ndslay, self._float_type)
-        # 6: Area(NDSLAY) - U1DREL
-        self.Area = fp.get_array(6, self.ndslay, self._float_type)
-        # 7: IAC(NODES) - U1DINT
-        self.Iac = fp.get_array(7, self.nodes, 'i')
-        # 8: JA(NJAG) - U1DINT
-        self.Ja = fp.get_array(8, self.njag, 'i')
-        if self.ivsd == 1:
-            # 9: IVC(NJAG) - U1DINT
-            self.Ivc = fp.get_array(9, self.njag, 'i')
-        if self.idsymrd == 1:
-            # 10a: CL1(NJAG) - U1DREL
-            self.Cl1 = fp.get_array('10a', self.njags, self._float_type)
-            # 10b: CL2(NJAG) - U1DREL
-            self.Cl2 = fp.get_array('10b', self.njags, self._float_type)
-        elif self.idsymrd == 0:
-            # 11: CL12(NJAG) - U1DREL
-            self.Cl12 = fp.get_array(11, self.njag, self._float_type)
-        # 12: FAHL(NJAG/NJAGS) - U1DREL
-        self.Fahl = fp.get_array(12, self.njag, self._float_type)
+        fp = _MFFileReader(fpath, self)
+        try:
+            # 0: [#Text]
+            fp.read_text(0)
+            # 1: NODES NLAY NJAG IVSD NPER ITMUNI LENUNI IDSYMRD
+            fp.read_named_items(1, ['nodes', 'nlay', 'njag', 'ivsd', 'nper',
+                                    'itmuni', 'lenuni', 'idsymrd'], 'i')
+            # 2: LAYCBD(NLAY)
+            dat = fp.get_items(2, num_items=self.nlay, multiline=True)
+            self.laycbd = [int(x) for x in dat]
+            if self.nlay > 1 and self.laycbd[-1]:
+                self._logger.error("%d: LAYCBD for the bottom layer must be 0;"
+                                   ' found %s', fp.lineno, dat[-1])
+            # 3: NODELAY(NLAY) - U1DINT
+            self.Nodelay = fp.get_array(3, self.nlay, 'i')
+            # 4: Top(NDSLAY) - U1DREL
+            self.Top = np.empty((self.nlay, self.ndslay), self._float_type)
+            for ilay in range(self.nlay):
+                self.Top[ilay] = fp.get_array(4, self.ndslay, self._float_type)
+            # 5: Bot(NDSLAY) - U1DREL
+            self.Bot = np.empty((self.nlay, self.ndslay), self._float_type)
+            for ilay in range(self.nlay):
+                self.Bot[ilay] = fp.get_array(5, self.ndslay, self._float_type)
+            # 6: Area(NDSLAY) - U1DREL
+            self.Area = fp.get_array(6, self.ndslay, self._float_type)
+            # 7: IAC(NODES) - U1DINT
+            self.Iac = fp.get_array(7, self.nodes, 'i')
+            # 8: JA(NJAG) - U1DINT
+            self.Ja = fp.get_array(8, self.njag, 'i')
+            if self.ivsd == 1:
+                # 9: IVC(NJAG) - U1DINT
+                self.Ivc = fp.get_array(9, self.njag, 'i')
+            if self.idsymrd == 1:
+                # 10a: CL1(NJAG) - U1DREL
+                self.Cl1 = fp.get_array('10a', self.njags, self._float_type)
+                # 10b: CL2(NJAG) - U1DREL
+                self.Cl2 = fp.get_array('10b', self.njags, self._float_type)
+            elif self.idsymrd == 0:
+                # 11: CL12(NJAG) - U1DREL
+                self.Cl12 = fp.get_array(11, self.njag, self._float_type)
+            # 12: FAHL(NJAG/NJAGS) - U1DREL
+            self.Fahl = fp.get_array(12, self.njag, self._float_type)
 
-        # FOR EACH STRESS PERIOD
-        # 13: PERLEN NSTP TSMULT Ss/Tr
-        self._read_stress_period_data(fp, 13)
+            # FOR EACH STRESS PERIOD
+            # 13: PERLEN NSTP TSMULT Ss/Tr
+            self._read_stress_period_data(fp, 13)
+            fp.check_end()
+        except Exception as e:
+            raise type(e), type(e)(fp.location_info() + ':' + str(e.message)),\
+                sys.exc_info()[2]
 
 
 class MULT(_MFPackage):
@@ -1086,49 +1180,53 @@ class BAS6(_MFPackageDIS):
     def Strt(self, value):
         setattr(self, '_Strt', value)
 
-    def read(self, fname=None):
+    def read(self, fpath=None):
         """Read BAS6 file"""
-        self._setup_read(fname)
-        fp = _MFFileReader(self)
-        # 0: [#Text]
-        fp.read_text(0)
-        # 1: Options
-        self.Options = [o for o in fp.next_line(1).upper().split()
-                        if o in self.valid_options]
-        if self.disu:
-            # 2a. IBOUND(NDSLAY) -- U1DINT
-            if self.xsection:
-                raise NotImplementedError(
-                    'unstructured xsection not implemented')
+        self._setup_read()
+        fp = _MFFileReader(fpath, self)
+        try:
+            # 0: [#Text]
+            fp.read_text(0)
+            # 1: Options
+            self.Options = [o for o in fp.next_line(1).upper().split()
+                            if o in self.valid_options]
+            if self.disu:
+                # 2a. IBOUND(NDSLAY) -- U1DINT
+                if self.xsection:
+                    raise NotImplementedError(
+                        'unstructured xsection not implemented')
+                else:
+                    raise NotImplementedError(
+                        'unstructured not implemented')
             else:
-                raise NotImplementedError(
-                    'unstructured not implemented')
-        else:
-            # 2b: IBOUND(NCOL,NROW) or (NCOL,NLAY) -- U2DINT
-            if self.xsection:
-                assert self.dis.nrow == 1, self.dis.nrow
-                CL_shape = (self.dis.ncol, self.dis.nlay)
-                self.ibound = fp.get_array('2b', CL_shape, 'i').T
+                # 2b: IBOUND(NCOL,NROW) or (NCOL,NLAY) -- U2DINT
+                if self.xsection:
+                    assert self.dis.nrow == 1, self.dis.nrow
+                    LC_shape = (self.dis.nlay, self.dis.ncol)
+                    self.ibound = fp.get_array('2b', LC_shape, 'i')
+                else:
+                    self.ibound = np.empty(self.dis.shape3d, 'i')
+                    for ilay in range(self.dis.nlay):
+                        self.ibound[ilay, :, :] = \
+                            fp.get_array('2b', self.dis.shape2d, 'i')
+            # 3: HNOFLO (10-character field unless Item 1 contains 'FREE'.)
+            line = fp.next_line(3)
+            if self.free:
+                self.hnoflo = self._float_type.type(line.split()[0])
             else:
-                CR_shape = (self.dis.ncol, self.dis.nrow)
-                self.ibound = np.empty(self.dis.shape3d, 'i')
+                self.hnoflo = self._float_type.type(line[0:10])
+            # 4: STRT(NCOL,NROW) or (NCOL,NLAY) -- U2DREL
+            if self.xsection:
+                self.strt = fp.get_array(4, LC_shape, self._float_type)
+            else:
+                self.strt = np.empty(self.dis.shape3d, self._float_type)
                 for ilay in range(self.dis.nlay):
-                    self.ibound[ilay, :, :] = \
-                        fp.get_array('2b', CR_shape, 'i').T
-        # 3: HNOFLO (10-character field unless Item 1 contains 'FREE'.)
-        line = fp.next_line(3)
-        if self.free:
-            self.hnoflo = self._float_type.type(line.split()[0])
-        else:
-            self.hnoflo = self._float_type.type(line[0:10])
-        # 4: STRT(NCOL,NROW) or (NCOL,NLAY) -- U2DREL
-        if self.xsection:
-            self.strt = fp.get_array(4, CL_shape, self._float_type).T
-        else:
-            self.strt = np.empty(self.dis.shape3d, self._float_type)
-            for ilay in range(self.dis.nlay):
-                self.strt[ilay, :, :] = \
-                    fp.get_array(4, CR_shape, self._float_type).T
+                    self.strt[ilay, :, :] = \
+                        fp.get_array(4, self.dis.shape2d, self._float_type)
+            fp.check_end()
+        except Exception as e:
+            raise type(e), type(e)(fp.location_info() + ':' + str(e.message)),\
+                sys.exc_info()[2]
 
 
 class OC(_MFPackage):
@@ -1215,63 +1313,68 @@ class RCH(_MFPackageDIS):
             self._logger.error("'nrchop' must be 2")
         setattr(self, '_Irch', value)
 
-    def read(self, fname=None):
+    def read(self, fpath=None):
         """Read RCH file"""
-        self._setup_read(fname)
-        fp = _MFFileReader(self)
-        # 0: [#Text]
-        fp.read_text(0)
-        # 1: [ PARAMETER NPRCH]
-        fp.read_parameter(1, ['nprch'])
-        # 2: NRCHOP IRCHCB
-        fp.read_named_items(2, ['nrchop', 'irchcb'], fmt='i')
-        ## Repeat Items 3 and 4 for each parameter; NPRCH times
-        for ipar in range(self.nprch):
-            # 3: [PARNAM PARTYP Parval NCLU [INSTANCES NUMINST]]
-            # 4a: [INSTNAM]
-            # 4b: [Mltarr Zonarr IZ]
-            raise NotImplementedError('PARAMETER not suported')
-
-        top_shape = (self.dis.nper, self.dis.nrow, self.dis.ncol)
-        CR_shape = (self.dis.ncol, self.dis.nrow)
-        self.Rech = np.empty(top_shape, self._float_type)
-        if self.nrchop == 2:
-            self.Irch = np.empty(top_shape, 'i')
-        else:
-            self.Irch = None
-
-        ## FOR EACH STRESS PERIOD
-        self.stress_period = 0
-        while fp.not_eof:
-            itime = self.stress_period
-            self.stress_period += 1
-            # 5: INRECH [INIRCH]
-            if self.nrchop == 2:
-                inrech, inirch = fp.get_items(5, 2, fmt='i')
-            else:
-                inrech = fp.get_items(5, 1, fmt='i')[0]
-                inirch = 0
-            if inrech < 0 and itime == 0:
-                raise MFReaderError(fp, "INRECH specified to read results "
-                                    "from previous stress period, but this is "
-                                    "the first stress period.")
-            # Either Item 6 or Item 7 may be read, but not both
-            if self.nprch == 0 and inrech >= 0:
-                # 6: [RECH(NCOL,NROW)]
-                self.Rech[itime] = fp.get_array(6, CR_shape, self._float_type).T
-            elif self.nprch > 0 and inrech > 0:
-                # 7: [Pname [Iname] [IRCHPF]]
+        self._setup_read()
+        fp = _MFFileReader(fpath, self)
+        try:
+            # 0: [#Text]
+            fp.read_text(0)
+            # 1: [ PARAMETER NPRCH]
+            fp.read_parameter(1, ['nprch'])
+            # 2: NRCHOP IRCHCB
+            fp.read_named_items(2, ['nrchop', 'irchcb'], fmt='i')
+            ## Repeat Items 3 and 4 for each parameter; NPRCH times
+            for ipar in range(self.nprch):
+                # 3: [PARNAM PARTYP Parval NCLU [INSTANCES NUMINST]]
+                # 4a: [INSTNAM]
+                # 4b: [Mltarr Zonarr IZ]
                 raise NotImplementedError('PARAMETER not suported')
-            elif inrech < 0:
-                # recharge rates from the preceding stress period are used
-                self.Rech[itime] = self.Rech[itime - 1]
+
+            top_shape = (self.dis.nper, self.dis.nrow, self.dis.ncol)
+            shape2d = self.dis.shape2d
+            self.Rech = np.empty(top_shape, self._float_type)
+            if self.nrchop == 2:
+                self.Irch = np.empty(top_shape, 'i')
             else:
-                raise MFReaderError(fp, "Undefined logic for Data Set 6 or 7")
-            if self.nrchop == 2 and inirch >= 0:
-                # 8: [IRCH(NCOL,NROW)]
-                self.Irch[itime] = fp.get_array(8, CR_shape, 'i').T
-            if self.stress_period == self.dis.nper:
-                break
+                self.Irch = None
+
+            ## FOR EACH STRESS PERIOD
+            self.stress_period = 0
+            for sp in range(self.nper):
+                itime = self.stress_period
+                self.stress_period += 1
+                # 5: INRECH [INIRCH]
+                if self.nrchop == 2:
+                    inrech, inirch = fp.get_items(5, 2, fmt='i')
+                else:
+                    inrech = fp.get_items(5, 1, fmt='i')[0]
+                    inirch = 0
+                if inrech < 0 and itime == 0:
+                    raise ValueError(
+                        "INRECH specified to read results from previous "
+                        "stress period, but this is the first stress period.")
+                # Either Item 6 or Item 7 may be read, but not both
+                if self.nprch == 0 and inrech >= 0:
+                    # 6: [RECH(NCOL,NROW)]
+                    self.Rech[itime] = fp.get_array(6, shape2d, self._float_type)
+                elif self.nprch > 0 and inrech > 0:
+                    # 7: [Pname [Iname] [IRCHPF]]
+                    raise NotImplementedError('PARAMETER not suported')
+                elif inrech < 0:
+                    # recharge rates from the preceding stress period are used
+                    self.Rech[itime] = self.Rech[itime - 1]
+                else:
+                    raise ValueError("undefined logic for Data Set 6 or 7")
+                if self.nrchop == 2 and inirch >= 0:
+                    # 8: [IRCH(NCOL,NROW)]
+                    self.Irch[itime] = fp.get_array(8, shape2d, 'i')
+                if self.stress_period == self.dis.nper:
+                    break
+            fp.check_end()
+        except Exception as e:
+            raise type(e), type(e)(fp.location_info() + ':' + str(e.message)),\
+                sys.exc_info()[2]
 
 
 class RIV(_MFPackage):
@@ -1478,6 +1581,10 @@ class SEN(_MFPackage):
 
 class PES(_MFPackage):
     """Parameter Estimation Process input file (MODFLOW-2000 only)"""
+
+
+class ASP(_MFPackage):
+    """PEST-ASP"""
 
 
 class _MFData(object):
@@ -1724,6 +1831,7 @@ class Modflow(object):
                 log.warn("%d:nunit: %s already assigned for %r",
                          ln, nunit, self[nunit].__class__.__name__)
             orig_fname = fname
+            fname = fname.strip('"')
             if os.path.sep == '/':  # for reading on POSIX systems
                 if '\\' in fname:
                     fname = fname.replace('\\', '/')

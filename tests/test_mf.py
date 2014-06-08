@@ -37,7 +37,7 @@ class TestMFPackage(unittest.TestCase):
             -44 888.0
             last line
         '''))
-        r = mf._MFFileReader(p, f)
+        r = mf._MFFileReader(f, p)
         self.assertTrue(r.not_eof)
         self.assertEqual(r.lineno, 0)
         self.assertEqual(len(r), 6)
@@ -74,7 +74,7 @@ class TestMFPackage(unittest.TestCase):
     def test_mf_reader_empty(self):
         p = TestPackage()
         f = BytesIO(dedent('''# Empty file'''))
-        r = mf._MFFileReader(p, f)
+        r = mf._MFFileReader(f, p)
         self.assertTrue(r.not_eof)
         self.assertEqual(r.lineno, 0)
         self.assertEqual(len(r), 1)
@@ -115,7 +115,7 @@ class TestMFPackage(unittest.TestCase):
              [4.5, 5.7, 2.2, 1.1, 1.7, 6.7, 6.9],
              [7.4, 3.5, 7.8, 8.5, 7.4, 6.8, 8.8]], 'f')
         m[47] = BytesIO(d2_expected.tostring())
-        r = mf._MFFileReader(p, f)
+        r = mf._MFFileReader(f, p)
         # Data Number 1: Read constant 4x5 array
         d1_shape = (4, 7)
         d1_expected = np.ones(d1_shape, 'f') * 5.7
@@ -248,7 +248,7 @@ class TestMFPackage(unittest.TestCase):
              [4.5, 5.7, 2.2, 1.1, 1.7, 6.7, 6.9],
              [7.4, 3.5, 7.8, 8.5, 7.4, 6.8, 8.8]], 'f')
         m[17] = BytesIO(d6_expected.tostring())
-        r = mf._MFFileReader(p, f)
+        r = mf._MFFileReader(f, p)
         # Data Number 1
         d1_shape = (7, 15)
         a = [[2.] * 8 + [-2.] * 7]
@@ -361,6 +361,7 @@ mf2kdir = '../MODFLOW-2000/data'
 mf2005kdir = '../MODFLOW-2005/test-run'
 mfnwtdir = '../MODFLOW-NWT/data'
 mfusgdir = '../MODFLOW-USG/test'
+gmsdir = '/opt/aquaveo/gms/10.0'
 
 
 class TestMF(unittest.TestCase):
@@ -427,6 +428,15 @@ class TestMF(unittest.TestCase):
                 m = mf.Modflow()
                 m.read(nam)
                 #print('%s: %s' % (os.path.basename(nam), ', '.join(list(m))))
+
+    @unittest.skipIf(not os.path.isdir(gmsdir), 'could not find ' + gmsdir)
+    def test_modflow_gms(self):
+        # print(gmsdir)
+        for dirpath, dirnames, filenames in os.walk(gmsdir):
+            for mfn in glob(os.path.join(dirpath, '*.mfn')):
+                m = mf.Modflow()
+                m.read(mfn)
+                #print('%s: %s' % (os.path.basename(mfn), ', '.join(list(m))))
 
 
 def test_suite():
