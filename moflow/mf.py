@@ -30,6 +30,8 @@ class _MFFileReader(object):
         if not None, which is typically a path to a filename, but can also be
         a file reader object with a 'readlines' method, such as BytesIO. If
         'f' is None, then it is obtained from parent.fpath, or parent.fname"""
+        if parent is None:
+            parent = _MFPackage()
         if not isinstance(parent, _MFPackage):
             raise ValueError("'parent' needs to be a _MFPackage object; found "
                              + str(type(parent)))
@@ -79,14 +81,14 @@ class _MFFileReader(object):
         except Exception as e:
             exec(fp.location_exception(e))
         """
-        location = '%s:%s:%s:Data set %s' % \
+        location = '%s:%s:%s:Data set %s:' % \
             (self.parent.__class__.__name__, self.fname, self.lineno,
              self.data_set_num)
         if sys.version_info[0] < 3:
-            return "raise type(e), type(e)('" + location + "' + ':' + " \
+            return "raise type(e), type(e)('" + location + "' + " \
                 "str(e)), sys.exc_info()[2]"
         else:
-            return "raise type(e)(str(e) + '" + location + "' + ':' + " \
+            return "raise type(e)(str(e) + '" + location + "' + " \
                 "str(e)).with_traceback(sys.exc_info()[2])"
 
     def check_end(self):
@@ -115,7 +117,7 @@ class _MFFileReader(object):
         return self.readline()
 
     def readline(self):
-        """Common file reading method, alias for next_line"""
+        """Name of file-like reading method, alias for next_line"""
         self.lineno += 1
         try:
             line = self.lines[self.lineno - 1]
@@ -129,7 +131,7 @@ class _MFFileReader(object):
 
     def get_named_items(self, data_set_num, names, fmt='s'):
         """Get items into dict. See get_items for fmt usage"""
-        items = self.get_items(data_set_num, len(names), fmt)
+        items = self.get_items(data_set_num, len(names), fmt, internal=True)
         res = {}
         for name, item in zip(names, items):
             if fmt != 's':
@@ -162,7 +164,7 @@ class _MFFileReader(object):
             raise ValueError(msg)
 
     def get_items(self, data_set_num=None, num_items=None, fmt='s',
-                  multiline=False):
+                  multiline=False, internal=False):
         """Get items from one or more (if set) lines into a list. If num_items
         is defined, then only this count will be returned and any remaining
         items from the line will be ignored. If there are too few items on the
@@ -174,6 +176,7 @@ class _MFFileReader(object):
          - 'i' for integer
          - 'f' for float, as defined by parent._float_type
          """
+        startln = self.lineno + 1
         self.data_set_num = data_set_num
         fill_missing = False
         if num_items is None or not multiline:
@@ -201,25 +204,42 @@ class _MFFileReader(object):
             else:
                 fill_value = '0'
             res += [self.conv(fill_value, fmt)] * fill_missing
+        if not internal:
+            if multiline:
+                toline = ' to %s' % (self.lineno,)
+            else:
+                toline = ''
+            self.logger.debug('%s:read %d items from line %d%s',
+                              self.data_set_num, num_items, startln, toline)
         return res
 
     def read_named_items(self, data_set_num, names, fmt='s'):
         """Read items into parent. See get_items for fmt usage"""
+        startln = self.lineno + 1
         items = self.get_named_items(data_set_num, names, fmt)
         for name in items.keys():
             setattr(self.parent, name, items[name])
+        self.logger.debug('%s:read %d items from line %d',
+                          self.data_set_num, len(items), startln)
 
     def read_text(self, data_set_num=0):
         """Reads 0 or more text (comment) for lines that start with '#'"""
+        startln = self.lineno + 1
         self.parent.text = []
-        line = self.next_line(data_set_num)
-        while line.startswith('#'):
-            line = line[1:].strip()
-            self.parent.text.append(line)
-            if not self.not_eof:
-                return
-            line = self.readline()
-        self.lineno -= 1  # scroll back one
+        while True:
+            try:
+                line = self.next_line(data_set_num)
+            except IndexError:
+                break
+            if line.startswith('#'):
+                line = line[1:].strip()
+                self.parent.text.append(line)
+            else:
+                self.lineno -= 1  # scroll back one?
+                break
+        self.logger.debug('%s:read %d lines of text from line %d to %d',
+                          self.data_set_num,
+                          len(self.parent.text), startln, self.lineno)
 
     def read_parameter(self, data_set_num, names):
         """Read [PARAMETER values]
@@ -230,10 +250,11 @@ class _MFFileReader(object):
         Parameter names are provided in a list, and are stored as integers
         to the parent object.
         """
+        startln = self.lineno + 1
         line = self.next_line(data_set_num)
         self.lineno -= 1
         if line.upper().startswith('PARAMETER'):
-            items = self.get_items(data_set_num, len(names) + 1)
+            items = self.get_items(data_set_num, len(names) + 1, internal=True)
             assert items[0].upper() == 'PARAMETER', items[0]
             for name, item in zip(names, items[1:]):
                 value = self.conv(item, 'i', name)
@@ -241,6 +262,8 @@ class _MFFileReader(object):
         else:
             for name in names:
                 setattr(self.parent, name, 0)
+        self.logger.debug('%s:read %d parameters from line %d',
+                          self.data_set_num, len(names), startln)
 
     def get_array(self, data_set_num, shape, dtype, return_dict=False):
         """Returns array data, similar to array reading utilities U2DREL,
@@ -254,7 +277,8 @@ class _MFFileReader(object):
 
         See Page 8-57 from the MODFLOW-2005 mannual for details.
         """
-        res = dict()
+        startln = self.lineno + 1
+        res = {}
         first_line = self.next_line(data_set_num)
         # Comments are considered after a '#' character on the first line
         if '#' in first_line:
@@ -463,6 +487,14 @@ class _MFFileReader(object):
         else:
             raise ValueError('array control line not understood: ' +
                              repr(control_line))
+        if 'text' in res:
+            withtext = ' with text "' + res['text'] + '"'
+        else:
+            withtext = ''
+        self.logger.debug(
+            '%s:read %r array with shape %s from line %d to %d%s',
+            self.data_set_num, ar.dtype.char, ar.shape,
+            startln, self.lineno, withtext)
         if return_dict:
             return res
         else:
@@ -552,7 +584,7 @@ class _MFPackage(object):
             try:
                 assert os.path.isfile(value)
             except:
-                raise ValueError(
+                raise IOError(
                     "'%s' is not a valid path to a file" % (value,))
         self._fpath = value
 
@@ -780,6 +812,7 @@ class _DIS(_MFPackage):
             raise ValueError("invalid 'lenuni_str': " + repr(value))
 
     def _read_stress_period_data(self, fp, data_set_num):
+        startln = fp.lineno + 1
         # PERLEN NSTP TSMULT Ss/tr
         stress_period_dtype = np.dtype([
             ('perlen', self._float_type),
@@ -795,6 +828,10 @@ class _DIS(_MFPackage):
                 row[name] = dat[name]
         for name in names:
             setattr(self, name, self.stress_period[name])
+        fp.logger.debug('%s:read %d stress period%s from line %d to %d',
+                        fp.data_set_num, len(self.stress_period),
+                        '' if len(self.stress_period) == 1 else 's',
+                        startln, fp.lineno)
 
 
 class DIS(_DIS):
@@ -975,14 +1012,6 @@ class DISU(_DIS):
         setattr(self, '_nodes', value)
 
     @property
-    def ndslay(self):
-        """Number of nodes per layer"""
-        if (self.nodes % self.nlay) != 0:
-            self._logger.warn(
-                "'ndslay' determined from non-multiple of 'nodes' for 'nlay'")
-        return int(self.nodes / self.nlay)
-
-    @property
     def njag(self):
         """Total number of connections of an unstructured grid"""
         return getattr(self, '_njag', None)
@@ -1062,15 +1091,23 @@ class DISU(_DIS):
             # 3: NODELAY(NLAY) - U1DINT
             self.Nodelay = fp.get_array(3, self.nlay, 'i')
             # 4: Top(NDSLAY) - U1DREL
-            self.Top = np.empty((self.nlay, self.ndslay), self._float_type)
-            for ilay in range(self.nlay):
-                self.Top[ilay] = fp.get_array(4, self.ndslay, self._float_type)
+            self.Top = []
+            for ilay, ndslay in enumerate(self.Nodelay):
+                n = '4:L' + str(ilay + 1)
+                self.Top.append(fp.get_array(n, ndslay, self._float_type))
             # 5: Bot(NDSLAY) - U1DREL
-            self.Bot = np.empty((self.nlay, self.ndslay), self._float_type)
-            for ilay in range(self.nlay):
-                self.Bot[ilay] = fp.get_array(5, self.ndslay, self._float_type)
+            self.Bot = []
+            for ilay, ndslay in enumerate(self.Nodelay):
+                n = '5:L' + str(ilay + 1)
+                self.Bot.append(fp.get_array(n, ndslay, self._float_type))
             # 6: Area(NDSLAY) - U1DREL
-            self.Area = fp.get_array(6, self.ndslay, self._float_type)
+            if self.ivsd == -1:
+                self.Area = fp.get_array(6, self.Nodelay[0], self._float_type)
+            else:
+                self.Area = []
+                for ilay, ndslay in enumerate(self.Nodelay):
+                    n = '6:L' + str(ilay + 1)
+                    self.Area.append(fp.get_array(n, ndslay, self._float_type))
             # 7: IAC(NODES) - U1DINT
             self.Iac = fp.get_array(7, self.nodes, 'i')
             # 8: JA(NJAG) - U1DINT
@@ -1078,6 +1115,8 @@ class DISU(_DIS):
             if self.ivsd == 1:
                 # 9: IVC(NJAG) - U1DINT
                 self.Ivc = fp.get_array(9, self.njag, 'i')
+            else:
+                fp.logger.debug('9:skipped; ivsd=%s', self.ivsd)
             if self.idsymrd == 1:
                 # 10a: CL1(NJAG) - U1DREL
                 self.Cl1 = fp.get_array('10a', self.njags, self._float_type)
@@ -1086,6 +1125,8 @@ class DISU(_DIS):
             elif self.idsymrd == 0:
                 # 11: CL12(NJAG) - U1DREL
                 self.Cl12 = fp.get_array(11, self.njag, self._float_type)
+            else:
+                fp.logger.debug('10 to 11:skipped; idsymrd=%s', self.idsymrd)
             # 12: FAHL(NJAG/NJAGS) - U1DREL
             self.Fahl = fp.get_array(12, self.njag, self._float_type)
 
@@ -1327,6 +1368,7 @@ class RCH(_MFPackageDIS):
 
     def read(self, fpath=None):
         """Read RCH file"""
+        raise NotImplementedError
         self._setup_read()
         fp = _MFFileReader(fpath, self)
         try:
@@ -1408,6 +1450,10 @@ class EVT(_MFPackage):
     """Ground-Water Flow Process Evapotranspiration Package"""
 
 
+class BFH(_MFPackage):
+    """BFH - Boundary Flow and Head Package"""
+
+
 class CHD(_MFPackage):
     """Ground-Water Flow Process Time-Variant Specified-Head Package"""
 
@@ -1428,6 +1474,14 @@ class DE4(_MFPackage):
     """Direct Solution Package"""
 
 
+class GMG(_MFPackage):
+    """GMG - Geometric Multigrid Solver"""
+
+
+class LMG(_MFPackage):
+    """Link-AMG Package"""
+
+
 class SMS(_MFPackage):
     """Sparse Matrix Solver"""
 
@@ -1442,10 +1496,6 @@ class GNC(_MFPackage):
 
 class IBS(_MFPackage):
     """Interbed-Storage Package"""
-
-
-class LMG(_MFPackage):
-    """Link-AMG Package"""
 
 
 class NWT(_MFPackage):

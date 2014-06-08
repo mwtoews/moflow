@@ -17,6 +17,11 @@ except ImportError:
     sys.path.append('.')
     from moflow import mf
 
+try:
+    import h5py
+except ImportError:
+    h5py = None
+
 import logging
 #mf.logger.level = logging.DEBUG
 #mf.logger.level = logging.INFO
@@ -433,14 +438,17 @@ class TestMF(unittest.TestCase):
                 m.read(nam)
                 #print('%s: %s' % (os.path.basename(nam), ', '.join(list(m))))
 
+    @unittest.skipIf(not h5py, 'h5py is not installed')
     @unittest.skipIf(not os.path.isdir(gmsdir), 'could not find ' + gmsdir)
     def test_modflow_gms(self):
         for dirpath, dirnames, filenames in os.walk(gmsdir):
             for mfn in glob(os.path.join(dirpath, '*.mfn')):
-                print(mfn)
-                m = mf.Modflow()
-                m.read(mfn)
-                #print('%s: %s' % (os.path.basename(mfn), ', '.join(list(m))))
+                #print(mfn)
+                try:
+                    m = mf.Modflow()
+                    m.read(mfn)
+                except IOError:
+                    continue
 
 
 def test_suite():
