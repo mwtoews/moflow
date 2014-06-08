@@ -3,7 +3,11 @@ import sys
 import unittest
 import numpy as np
 from glob import glob
-from io import BytesIO
+if sys.version_info[0] < 3:
+    from io import BytesIO
+    StringIO = BytesIO
+else:
+    from io import StringIO, BytesIO
 from textwrap import dedent
 
 try:
@@ -29,7 +33,7 @@ class TestMFPackage(unittest.TestCase):
 
     def test_mf_reader_basic(self):
         p = TestPackage()
-        f = BytesIO(dedent('''\
+        f = StringIO(dedent('''\
             # A comment
             100 ignore
             200 -2.4E-12
@@ -73,7 +77,7 @@ class TestMFPackage(unittest.TestCase):
 
     def test_mf_reader_empty(self):
         p = TestPackage()
-        f = BytesIO(dedent('''# Empty file'''))
+        f = StringIO(dedent('''# Empty file'''))
         r = mf._MFFileReader(f, p)
         self.assertTrue(r.not_eof)
         self.assertEqual(r.lineno, 0)
@@ -89,7 +93,7 @@ class TestMFPackage(unittest.TestCase):
         m = mf.Modflow()
         p = TestPackage()
         m.append(p)
-        f = BytesIO(dedent('''\
+        f = StringIO(dedent('''\
         CONSTANT  5.7     This sets an entire array to the value "5.7".
         INTERNAL  1.0  (7F4.0)  3    This reads the array values from the ...
          1.2 3.7 9.3 4.2 2.2 9.9 1.0
@@ -107,7 +111,7 @@ class TestMFPackage(unittest.TestCase):
             ' 4.5 5.7 2.2 1.1 1.7 6.7 6.9\n'
             ' 7.4 3.5 7.8 8.5 7.4 6.8 8.8\n'
         )
-        m[52] = BytesIO(d2_str)
+        m[52] = StringIO(d2_str)
         # Prepare binary data for unit 47
         d2_expected = np.array(
             [[1.2, 3.7, 9.3, 4.2, 2.2, 9.9, 1.0],
@@ -181,7 +185,7 @@ class TestMFPackage(unittest.TestCase):
         p = TestPackage()
         p.nunit = 11
         m.append(p)
-        f = BytesIO('''\
+        f = StringIO('''\
         11        1. (15f4.0)                    7  WETDRY-1
   2.  2.  2.  2.  2.  2.  2.  2. -2. -2. -2. -2. -2. -2. -2.
   2.  2.  2.  2.  2.  2.  2.  2. -2. -2. -2. -2. -2. -2. -2.
@@ -205,7 +209,7 @@ class TestMFPackage(unittest.TestCase):
          0      145.
 ''')
         # Prepare two ASCII data sets for unit 16
-        m[16] = BytesIO('''\
+        m[16] = StringIO('''\
   0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0
   0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0
   0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0
@@ -431,9 +435,9 @@ class TestMF(unittest.TestCase):
 
     @unittest.skipIf(not os.path.isdir(gmsdir), 'could not find ' + gmsdir)
     def test_modflow_gms(self):
-        # print(gmsdir)
         for dirpath, dirnames, filenames in os.walk(gmsdir):
             for mfn in glob(os.path.join(dirpath, '*.mfn')):
+                print(mfn)
                 m = mf.Modflow()
                 m.read(mfn)
                 #print('%s: %s' % (os.path.basename(mfn), ', '.join(list(m))))

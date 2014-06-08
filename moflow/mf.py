@@ -67,11 +67,27 @@ class _MFFileReader(object):
         """Returns number of lines"""
         return len(self.lines)
 
-    def location_info(self):
-        """Helper function to be used with exceptions"""
-        return '%s:%s:%s:Data set %s' % \
+    def location_exception(self, e):
+        """Use to show location of exception while reading file
+
+        Example:
+        fp = _MFFileReader(fpath, self)
+        try:
+            fp.read_text(0)
+            ...
+            fp.check_end()
+        except Exception as e:
+            exec(fp.location_exception(e))
+        """
+        location = '%s:%s:%s:Data set %s' % \
             (self.parent.__class__.__name__, self.fname, self.lineno,
              self.data_set_num)
+        if sys.version_info[0] < 3:
+            return "raise type(e), type(e)('" + location + "' + ':' + " \
+                "str(e)), sys.exc_info()[2]"
+        else:
+            return "raise type(e)(str(e) + '" + location + "' + ':' + " \
+                "str(e)).with_traceback(sys.exc_info()[2])"
 
     def check_end(self):
         """Check end of file and show messages in logger on status"""
@@ -701,7 +717,7 @@ class _DIS(_MFPackage):
         setattr(self, '_itmuni', value)
 
     _itmuni_str = {0: '?', 1: 's', 2: 'min', 3: 'h', 4: 'd', 5: 'y'}
-    _str_itmuni = dict((v, k) for k, v in _itmuni_str.iteritems())
+    _str_itmuni = {v: k for k, v in _itmuni_str.items()}
 
     @property
     def itmuni_str(self):
@@ -742,7 +758,7 @@ class _DIS(_MFPackage):
         setattr(self, '_lenuni', value)
 
     _lenuni_str = {0: '?', 1: 'ft', 2: 'm', 3: 'cm'}
-    _str_lenuni = dict((v, k) for k, v in _lenuni_str.iteritems())
+    _str_lenuni = {v: k for k, v in _lenuni_str.items()}
 
     @property
     def lenuni_str(self):
@@ -938,9 +954,7 @@ class DIS(_DIS):
             self._read_stress_period_data(fp, 7)
             fp.check_end()
         except Exception as e:
-            raise type(e), type(e)(fp.location_info() + ':' + str(e.message)),\
-                sys.exc_info()[2]
-
+            exec(fp.location_exception(e))
 
 class DISU(_DIS):
     """Unstructured Discretization file"""
@@ -1080,8 +1094,7 @@ class DISU(_DIS):
             self._read_stress_period_data(fp, 13)
             fp.check_end()
         except Exception as e:
-            raise type(e), type(e)(fp.location_info() + ':' + str(e.message)),\
-                sys.exc_info()[2]
+            exec(fp.location_exception(e))
 
 
 class MULT(_MFPackage):
@@ -1225,8 +1238,7 @@ class BAS6(_MFPackageDIS):
                         fp.get_array(4, self.dis.shape2d, self._float_type)
             fp.check_end()
         except Exception as e:
-            raise type(e), type(e)(fp.location_info() + ':' + str(e.message)),\
-                sys.exc_info()[2]
+            exec(fp.location_exception(e))
 
 
 class OC(_MFPackage):
@@ -1324,57 +1336,56 @@ class RCH(_MFPackageDIS):
             fp.read_parameter(1, ['nprch'])
             # 2: NRCHOP IRCHCB
             fp.read_named_items(2, ['nrchop', 'irchcb'], fmt='i')
+            if self.disu:
+                # 2b. MXNDRCH
+                fp.read_named_items(2, ['mxndrch'], fmt='i')
             ## Repeat Items 3 and 4 for each parameter; NPRCH times
             for ipar in range(self.nprch):
                 # 3: [PARNAM PARTYP Parval NCLU [INSTANCES NUMINST]]
                 # 4a: [INSTNAM]
                 # 4b: [Mltarr Zonarr IZ]
                 raise NotImplementedError('PARAMETER not suported')
-
-            top_shape = (self.dis.nper, self.dis.nrow, self.dis.ncol)
-            shape2d = self.dis.shape2d
-            self.Rech = np.empty(top_shape, self._float_type)
-            if self.nrchop == 2:
-                self.Irch = np.empty(top_shape, 'i')
-            else:
-                self.Irch = None
+            if self.dis:
+                top_shape = (self.dis.nper, self.dis.nrow, self.dis.ncol)
+                shape2d = self.dis.shape2d
+                self.Rech = np.empty(top_shape, self._float_type)
+                if self.nrchop == 2:
+                    self.Irch = np.empty(top_shape, 'i')
+                else:
+                    self.Irch = None
 
             ## FOR EACH STRESS PERIOD
-            self.stress_period = 0
+            stress_period = 0
             for sp in range(self.nper):
-                itime = self.stress_period
-                self.stress_period += 1
+                stress_period += 1
                 # 5: INRECH [INIRCH]
                 if self.nrchop == 2:
                     inrech, inirch = fp.get_items(5, 2, fmt='i')
                 else:
                     inrech = fp.get_items(5, 1, fmt='i')[0]
                     inirch = 0
-                if inrech < 0 and itime == 0:
+                if inrech < 0 and sp == 0:
                     raise ValueError(
                         "INRECH specified to read results from previous "
-                        "stress period, but this is the first stress period.")
+                        "stress period, but this is the first stress period")
                 # Either Item 6 or Item 7 may be read, but not both
                 if self.nprch == 0 and inrech >= 0:
                     # 6: [RECH(NCOL,NROW)]
-                    self.Rech[itime] = fp.get_array(6, shape2d, self._float_type)
+                    self.Rech[sp] = fp.get_array(6, shape2d, self._float_type)
                 elif self.nprch > 0 and inrech > 0:
                     # 7: [Pname [Iname] [IRCHPF]]
                     raise NotImplementedError('PARAMETER not suported')
                 elif inrech < 0:
                     # recharge rates from the preceding stress period are used
-                    self.Rech[itime] = self.Rech[itime - 1]
+                    self.Rech[sp] = self.Rech[sp - 1]
                 else:
                     raise ValueError("undefined logic for Data Set 6 or 7")
                 if self.nrchop == 2 and inirch >= 0:
                     # 8: [IRCH(NCOL,NROW)]
-                    self.Irch[itime] = fp.get_array(8, shape2d, 'i')
-                if self.stress_period == self.dis.nper:
-                    break
+                    self.Irch[sp] = fp.get_array(8, shape2d, 'i')
             fp.check_end()
         except Exception as e:
-            raise type(e), type(e)(fp.location_info() + ':' + str(e.message)),\
-                sys.exc_info()[2]
+            exec(fp.location_exception(e))
 
 
 class RIV(_MFPackage):
