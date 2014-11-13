@@ -22,6 +22,10 @@ _re_fmtin = re.compile(
     r'|FREE|BINARY)\)')
 
 
+class MissingFile(Exception):
+    pass
+
+
 class _MFFileReader(object):
     """MODFLOW file reader"""
 
@@ -55,6 +59,12 @@ class _MFFileReader(object):
             # Read whole file at once, then close it
             with open(self.parent.fpath, 'r') as fp:
                 self.lines = fp.readlines()
+        if self.parent.nam is None:
+            self.parent.nam = Modflow()
+            try:
+                self.parent.nam.ref_dir = os.path.dirname(self.fpath)
+            except:
+                pass
         # Set up logger
         #name = os.path.dirname(f)
         self.logger = logging.getLogger(self.fname)
@@ -111,13 +121,17 @@ class _MFFileReader(object):
         """Reader is not at the end of file (EOF)"""
         return self.lineno < len(self.lines)
 
-    def next_line(self, data_set_num=None):
+    def next_line(self, data_set_num=None, internal=False):
         """Get next line, setting data set number and increment lineno"""
         self.data_set_num = data_set_num
-        return self.readline()
+        line = self.readline()
+        if not internal:
+            self.logger.debug('%s:read line %d:"%s"',
+                              self.data_set_num, self.lineno, line.rstrip())
+        return line
 
     def readline(self):
-        """Name of file-like reading method, alias for next_line"""
+        """Name of file-like reading method, sort of alias for next_line"""
         self.lineno += 1
         try:
             line = self.lines[self.lineno - 1]
@@ -228,7 +242,7 @@ class _MFFileReader(object):
         self.parent.text = []
         while True:
             try:
-                line = self.next_line(data_set_num)
+                line = self.next_line(data_set_num, internal=True)
             except IndexError:
                 break
             if line.startswith('#'):
@@ -241,6 +255,22 @@ class _MFFileReader(object):
                           self.data_set_num,
                           len(self.parent.text), startln, self.lineno)
 
+    def read_options(self, data_set_num, process_aux=True):
+        """Read options, and optionally process auxiliary variables"""
+        line = self.next_line(data_set_num, internal=True)
+        self.parent.Options = line.upper().split()
+        if hasattr(self.parent, 'valid_options'):
+            for opt in self.parent.Options:
+                if opt not in self.parent.Options:
+                    self.logger.warn("%s:unrecognised option %r",
+                                     self.data_set_num, opt)
+        if process_aux:
+            raise NotImplementedError
+        else:
+            self.logger.debug('%s:read %d options from line %d:%s',
+                              self.data_set_num, len(self.parent.Options),
+                              self.lineno, self.parent.Options)
+
     def read_parameter(self, data_set_num, names):
         """Read [PARAMETER values]
 
@@ -251,7 +281,7 @@ class _MFFileReader(object):
         to the parent object.
         """
         startln = self.lineno + 1
-        line = self.next_line(data_set_num)
+        line = self.next_line(data_set_num, internal=True)
         self.lineno -= 1
         if line.upper().startswith('PARAMETER'):
             items = self.get_items(data_set_num, len(names) + 1, internal=True)
@@ -279,7 +309,7 @@ class _MFFileReader(object):
         """
         startln = self.lineno + 1
         res = {}
-        first_line = self.next_line(data_set_num)
+        first_line = self.next_line(data_set_num, internal=True)
         # Comments are considered after a '#' character on the first line
         if '#' in first_line:
             res['text'] = first_line[(first_line.find('#') + 1):].strip()
@@ -444,7 +474,7 @@ class _MFFileReader(object):
                 slice3 = slice(start3, start3 + nToRead3)
             fpath = os.path.join(self.parent.nam.ref_dir, fname)
             if not os.path.isfile(fpath):
-                raise IOError("cannot find file '%s'" % (fpath,))
+                raise MissingFile("cannot find file '%s'" % (fpath,))
             h5 = h5py.File(fpath, 'r')
             ds = h5[pathInFile]
             if nDim == 1:
@@ -584,7 +614,7 @@ class _MFPackage(object):
             try:
                 assert os.path.isfile(value)
             except:
-                raise IOError(
+                raise MissingFile(
                     "'%s' is not a valid path to a file" % (value,))
         self._fpath = value
 
@@ -606,7 +636,7 @@ class _MFPackage(object):
                                "%r", value, expected)
         self._nam_option = value
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, fpath=None, *args, **kwargs):
         """Package constructor"""
         # Set up logger
         self._logger = logging.getLogger(self.__class__.__name__)
@@ -616,11 +646,10 @@ class _MFPackage(object):
             self._logger.warn('unused args: %r', args)
         if 'dis' in kwargs:
             self.dis = kwargs.pop('dis')
-        if 'fpath' in kwargs:
-            self.fpath = kwargs.pop('fpath')
-            self.read()
-        elif 'fname' in kwargs:
-            self.fname = kwargs.pop('fname')
+        elif 'disu' in kwargs:
+            self.disu = kwargs.pop('disu')
+        if fpath is not None:
+            self.fpath = fpath
             self.read()
         for kw in kwargs.keys():
             if hasattr(self, kw):
@@ -643,6 +672,7 @@ class _MFPackage(object):
     def _setup_read(self):
         """Hook to set-up attributes"""
         pass
+
 
 class _MFPackageDIS(_MFPackage):
     """Abstract class for packages that use data from either DIS or DISU"""
@@ -969,8 +999,9 @@ class DIS(_DIS):
             dat = fp.get_items(2, num_items=self.nlay, multiline=True)
             self.laycbd = [int(x) for x in dat]
             if self.nlay > 1 and self.laycbd[-1]:
-                self._logger.error("%d: LAYCBD for the bottom layer must be 0;"
-                                   ' found %s', fp.lineno, dat[-1])
+                self._logger.error("%d:%d:LAYCBD for the bottom layer must be "
+                                   "'0'; found %r", fp.data_set_num, fp.lineno,
+                                   dat[-1])
             # 3: DELR(NCOL) - U1DREL
             self.delr = fp.get_array(3, self.ncol, self._float_type)
             # 4: DELC(NROW) - U1DREL
@@ -984,14 +1015,16 @@ class DIS(_DIS):
                 num_botm += sum(self.laycbd)
             self.botm = np.empty((num_botm,) + self.shape2d, self._float_type)
             for ibot in range(num_botm):
+                n = '6:L' + str(ibot + 1)
                 self.botm[ibot, :, :] = \
-                    fp.get_array(6, self.shape2d, self._float_type)
+                    fp.get_array(n, self.shape2d, self._float_type)
             ## FOR EACH STRESS PERIOD
             # 7: PERLEN NSTP TSMULT Ss/tr
             self._read_stress_period_data(fp, 7)
             fp.check_end()
         except Exception as e:
             exec(fp.location_exception(e))
+
 
 class DISU(_DIS):
     """Unstructured Discretization file"""
@@ -1069,9 +1102,9 @@ class DISU(_DIS):
         setattr(self, '_idsymrd', value)
 
     def __repr__(self):
-        return '<%s: nper=%s, nlay=%s, nodes=%s, njag=%s>' %\
+        return '<%s: nper=%s, nlay=%s, nodes=%s, njag=%s, ivsd=%s>' %\
             (self.__class__.__name__, self.nper, self.nlay, self.nodes,
-             self.njag)
+             self.njag, self.ivsd)
 
     def read(self, fpath=None):
         """Read DISU file"""
@@ -1122,7 +1155,9 @@ class DISU(_DIS):
                 self.Cl1 = fp.get_array('10a', self.njags, self._float_type)
                 # 10b: CL2(NJAG) - U1DREL
                 self.Cl2 = fp.get_array('10b', self.njags, self._float_type)
+                fp.logger.debug('11:skipped; idsymrd=%s', self.idsymrd)
             elif self.idsymrd == 0:
+                fp.logger.debug('10:skipped; idsymrd=%s', self.idsymrd)
                 # 11: CL12(NJAG) - U1DREL
                 self.Cl12 = fp.get_array(11, self.njag, self._float_type)
             else:
@@ -1242,27 +1277,32 @@ class BAS6(_MFPackageDIS):
             # 0: [#Text]
             fp.read_text(0)
             # 1: Options
-            self.Options = [o for o in fp.next_line(1).upper().split()
-                            if o in self.valid_options]
+            fp.read_options(1, False)
             if self.disu:
                 # 2a. IBOUND(NDSLAY) -- U1DINT
-                if self.xsection:
-                    raise NotImplementedError(
-                        'unstructured xsection not implemented')
-                else:
-                    raise NotImplementedError(
-                        'unstructured not implemented')
+                self.Ibound = []
+                if not self.xsection:
+                    for ilay, ndslay in enumerate(self.disu.Nodelay):
+                        n = '2a:L' + str(ilay + 1)
+                        self.Ibound.append(
+                            fp.get_array(n, ndslay, self._float_type))
+                else:  # same???
+                    for ilay, ndslay in enumerate(self.disu.Nodelay):
+                        n = '2a:L' + str(ilay + 1)
+                        self.Ibound.append(
+                            fp.get_array(n, ndslay, self._float_type))
             else:
                 # 2b: IBOUND(NCOL,NROW) or (NCOL,NLAY) -- U2DINT
                 if self.xsection:
                     assert self.dis.nrow == 1, self.dis.nrow
                     LC_shape = (self.dis.nlay, self.dis.ncol)
-                    self.ibound = fp.get_array('2b', LC_shape, 'i')
+                    self.Ibound = fp.get_array('2b', LC_shape, 'i')
                 else:
-                    self.ibound = np.empty(self.dis.shape3d, 'i')
+                    self.Ibound = np.empty(self.dis.shape3d, 'i')
                     for ilay in range(self.dis.nlay):
-                        self.ibound[ilay, :, :] = \
-                            fp.get_array('2b', self.dis.shape2d, 'i')
+                        n = '2b:L' + str(ilay + 1)
+                        self.Ibound[ilay, :, :] = \
+                            fp.get_array(n, self.dis.shape2d, 'i')
             # 3: HNOFLO (10-character field unless Item 1 contains 'FREE'.)
             line = fp.next_line(3)
             if self.free:
