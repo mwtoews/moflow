@@ -11,11 +11,11 @@ else:
 from textwrap import dedent
 
 try:
-    from moflow import mf
+    from moflow import pkg
 except ImportError:
     os.chdir('..')
     sys.path.append('.')
-    from moflow import mf
+    from moflow import pkg
 
 try:
     import h5py
@@ -23,13 +23,17 @@ except ImportError:
     h5py = None
 
 import logging
-#mf.logger.level = logging.DEBUG
-#mf.logger.level = logging.INFO
-mf.logger.level = logging.WARN
-#mf.logger.level = logging.ERROR
+from moflow import logger
+from moflow.mf import Modflow
+from moflow.pkg.reader import MFFileReader
+
+# logger.level = logging.DEBUG
+# logger.level = logging.INFO
+logger.level = logging.WARN
+# logger.level = logging.ERROR
 
 
-class TestPackage(mf._MFPackage):
+class TestPackage(pkg.base._MFPackage):
     par1 = None
     par2 = None
 
@@ -46,7 +50,7 @@ class TestMFPackage(unittest.TestCase):
             -44 888.0
             last line
         '''))
-        r = mf._MFFileReader(f, p)
+        r = MFFileReader(f, p)
         self.assertTrue(r.not_eof)
         self.assertEqual(r.lineno, 0)
         self.assertEqual(len(r), 6)
@@ -83,7 +87,7 @@ class TestMFPackage(unittest.TestCase):
     def test_mf_reader_empty(self):
         p = TestPackage()
         f = StringIO(dedent('''# Empty file'''))
-        r = mf._MFFileReader(f, p)
+        r = MFFileReader(f, p)
         self.assertTrue(r.not_eof)
         self.assertEqual(r.lineno, 0)
         self.assertEqual(len(r), 1)
@@ -95,7 +99,7 @@ class TestMFPackage(unittest.TestCase):
 
     def test_mf_read_free_arrays(self):
         # Examples from page 8-59 of TM6A16_MF2005
-        m = mf.Modflow()
+        m = Modflow()
         p = TestPackage()
         m.append(p)
         f = StringIO(dedent('''\
@@ -124,7 +128,7 @@ class TestMFPackage(unittest.TestCase):
              [4.5, 5.7, 2.2, 1.1, 1.7, 6.7, 6.9],
              [7.4, 3.5, 7.8, 8.5, 7.4, 6.8, 8.8]], 'f')
         m[47] = BytesIO(d2_expected.tostring())
-        r = mf._MFFileReader(f, p)
+        r = MFFileReader(f, p)
         # Data Number 1: Read constant 4x5 array
         d1_shape = (4, 7)
         d1_expected = np.ones(d1_shape, 'f') * 5.7
@@ -186,7 +190,7 @@ class TestMFPackage(unittest.TestCase):
         self.assertFalse(r.not_eof)
 
     def test_mf_read_fixed_arrays(self):
-        m = mf.Modflow()
+        m = Modflow()
         p = TestPackage()
         p.nunit = 11
         m.append(p)
@@ -257,7 +261,7 @@ class TestMFPackage(unittest.TestCase):
              [4.5, 5.7, 2.2, 1.1, 1.7, 6.7, 6.9],
              [7.4, 3.5, 7.8, 8.5, 7.4, 6.8, 8.8]], 'f')
         m[17] = BytesIO(d6_expected.tostring())
-        r = mf._MFFileReader(f, p)
+        r = MFFileReader(f, p)
         # Data Number 1
         d1_shape = (7, 15)
         a = [[2.] * 8 + [-2.] * 7]
@@ -377,75 +381,75 @@ class TestMF(unittest.TestCase):
 
     def test_basic_modflow(self):
         # build Modflow object
-        m = mf.Modflow()
+        m = Modflow()
         self.assertEqual(len(m), 0)
         self.assertEqual(list(m), [])
-        m.dis = mf.DIS()
+        m.dis = pkg.class_dict['DIS']()
         self.assertEqual(len(m), 1)
         self.assertEqual(list(m), ['dis'])
-        m.append(mf.BAS6())
+        m.append(pkg.class_dict['BAS6']())
         self.assertEqual(len(m), 2)
         self.assertEqual(list(m), ['dis', 'bas6'])
-        self.assertTrue(isinstance(m.bas6, mf.BAS6))
+        self.assertTrue(isinstance(m.bas6, pkg.class_dict['BAS6']))
         del m.dis
         self.assertEqual(len(m), 1)
         self.assertEqual(list(m), ['bas6'])
-        self.assertTrue(isinstance(m.bas6, mf.BAS6))
-        m.bas6 = mf.BAS6()
+        self.assertTrue(isinstance(m.bas6, pkg.class_dict['BAS6']))
+        m.bas6 = pkg.class_dict['BAS6']()
         self.assertRaises(ValueError, m.append, True)
-        self.assertRaises(AttributeError, setattr, m, 'rch', mf.RIV())
-        m.append(mf.DIS())
+        self.assertRaises(AttributeError, setattr, m, 'rch', pkg.RIV())
+        m.append(pkg.class_dict['DIS']())
         self.assertEqual(len(m), 2)
         self.assertEqual(list(m), ['bas6', 'dis'])
 
     @unittest.skipIf(not os.path.isdir(mf2kdir), 'could not find ' + mf2kdir)
     def test_modflow_2000(self):
-        #print(mf2kdir)
+        # print(mf2kdir)
         for nam in glob(os.path.join(mf2kdir, '*.nam')):
-            #print(nam)
-            m = mf.Modflow()
+            # print(nam)
+            m = Modflow()
             m.read(nam)
-            #print('%s: %s' % (os.path.basename(nam), ', '.join(list(m))))
+            # print('%s: %s' % (os.path.basename(nam), ', '.join(list(m))))
 
     @unittest.skipIf(not os.path.isdir(mf2005kdir),
                      'could not find ' + mf2005kdir)
     def test_modflow_2005(self):
-        #print(mf2005kdir)
+        # print(mf2005kdir)
         for nam in glob(os.path.join(mf2005kdir, '*.nam')):
-            m = mf.Modflow()
+            m = Modflow()
             m.read(nam)
-            #print('%s: %s' % (os.path.basename(nam), ', '.join(list(m))))
+            # print('%s: %s' % (os.path.basename(nam), ', '.join(list(m))))
 
     @unittest.skipIf(not os.path.isdir(mfnwtdir), 'could not find ' + mfnwtdir)
     def test_modflow_nwt(self):
-        #print(mfnwtdir)
+        # print(mfnwtdir)
         for dirpath, dirnames, filenames in os.walk(mfnwtdir):
             for nam in glob(os.path.join(dirpath, '*.nam')):
                 if 'SWI_data_files' in dirpath or 'SWR_data_files' in dirpath:
                     ref_dir = dirpath  # normal
                 else:
                     ref_dir = mfnwtdir
-                m = mf.Modflow()
+                m = Modflow()
                 m.read(nam, ref_dir=ref_dir)
-                #print('%s: %s' % (os.path.basename(nam), ', '.join(list(m))))
+                # print('%s: %s' % (os.path.basename(nam), ', '.join(list(m))))
 
     @unittest.skipIf(not os.path.isdir(mfusgdir), 'could not find ' + mfusgdir)
     def test_modflow_usg(self):
         # print(mfusgdir)
         for dirpath, dirnames, filenames in os.walk(mfusgdir):
             for nam in glob(os.path.join(dirpath, '*.nam')):
-                m = mf.Modflow()
+                m = Modflow()
                 m.read(nam)
-                #print('%s: %s' % (os.path.basename(nam), ', '.join(list(m))))
+                # print('%s: %s' % (os.path.basename(nam), ', '.join(list(m))))
 
-    @unittest.skipIf(not h5py, 'h5py is not installed')
-    @unittest.skipIf(not os.path.isdir(gmsdir), 'could not find ' + gmsdir)
+    @unittest.skipIf(not h5py or not os.path.isdir(gmsdir),
+                     'h5py is not installed or could not find ' + gmsdir)
     def test_modflow_gms(self):
         for dirpath, dirnames, filenames in os.walk(gmsdir):
             for mfn in glob(os.path.join(dirpath, '*.mfn')):
-                #print(mfn)
+                # print(mfn)
                 try:
-                    m = mf.Modflow()
+                    m = Modflow()
                     m.read(mfn)
                 except IOError:
                     continue
