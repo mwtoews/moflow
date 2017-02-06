@@ -1,11 +1,10 @@
 """Observation Process
 """
 
-__all__ = [
-    'CHOB', 'DROB', 'DTOB', 'GBOB', 'OBS', 'HOB', 'RVOB', 'STOB'
-]
-
 from .base import MFPackage
+
+
+__all__ = ['CHOB', 'DROB', 'DTOB', 'GBOB', 'OBS', 'HOB', 'RVOB', 'STOB']
 
 
 class CHOB(MFPackage):

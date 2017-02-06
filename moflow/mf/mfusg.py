@@ -1,14 +1,15 @@
 """Unstructured Grids (MODFLOW-USG only)
 """
 
+from .base import MFPackage
+
+
 __all__ = ['CLN', 'GNC']
 
-from .base import _MFPackage
 
-
-class CLN(_MFPackage):
+class CLN(MFPackage):
     """Connected Linear Network Process"""
 
 
-class GNC(_MFPackage):
+class GNC(MFPackage):
     """Ghost Node Correction Package"""

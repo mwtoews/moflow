@@ -1,20 +1,20 @@
 """Subsidence
 """
-__all__ = [
-    'IBS', 'SUB', 'SWT'
-]
 
-from .base import _MFPackage
+from .base import MFPackage
 
 
-class IBS(_MFPackage):
+__all__ = ['IBS', 'SUB', 'SWT']
+
+
+class IBS(MFPackage):
     """Interbed-Storage Package"""
 
 
-class SUB(_MFPackage):
+class SUB(MFPackage):
     """Subsidence and Aquifer-System Compaction Package"""
 
 
-class SWT(_MFPackage):
+class SWT(MFPackage):
     """Subsidence and Aquifer-System Compaction Package for Water-Table
     Aquifers"""

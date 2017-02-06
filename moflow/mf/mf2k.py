@@ -1,22 +1,23 @@
 """MODFLOW-2000 only
 """
 
-__all__ = ['GLOBAL', 'ADV2', 'SEN', 'PES']
+from .base import MFPackage, MFData
 
-from .base import _MFPackage, MFData
+
+__all__ = ['GLOBAL', 'ADV2', 'SEN', 'PES']
 
 
 class GLOBAL(MFData):
     """Global listing file"""
 
 
-class ADV2(_MFPackage):
+class ADV2(MFPackage):
     """Advective-Transport Observation Input File"""
 
 
-class SEN(_MFPackage):
+class SEN(MFPackage):
     """Sensitivity Process input file"""
 
 
-class PES(_MFPackage):
+class PES(MFPackage):
     """Parameter Estimation Process input file"""

@@ -1,16 +1,22 @@
 import os
+import numpy as np
 import re
 import sys
-import numpy as np
 
 try:
     import h5py
 except ImportError:
     h5py = None
 
-from .base import _MFPackage, MissingFile
+'''
+try:
+    from collections import OrderedDict
+except ImportError:
+    from ordereddict import OrderedDict
+'''
 from .. import logger, logging
-from ..mf import Modflow
+from .base import MFPackage, MissingFile
+from .name import Modflow
 
 _re_fmtin = re.compile(
     r'\((?P<body>(?P<rep>\d*)(?P<symbol>[IEFG][SN]?)(?P<w>\d+)(\.(?P<d>\d+))?'
@@ -19,17 +25,28 @@ _re_fmtin = re.compile(
 
 class MFFileReader(object):
     """MODFLOW file reader"""
+    _parent_class = MFPackage
 
     def __init__(self, f=None, parent=None):
-        """Initialize with parent _MFPackage. File is read from 'f' argument,
-        if not None, which is typically a path to a filename, but can also be
-        a file reader object with a 'readlines' method, such as BytesIO. If
-        'f' is None, then it is obtained from parent.fpath, or parent.fname"""
+        """Initialize with a file and an instance of a parent class
+
+        Parameters
+        ----------
+        f : str, file-like object or None
+            A path to a file, or a file-like reader with with a 'readlines'
+            method, such as BytesIO. If None, then it is obtained from
+            parent.fpath, or parent.fname
+        parent : instance of MFPackage
+        """
+        # Set up logger
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger.setLevel(logger.level)
         if parent is None:
-            parent = _MFPackage()
-        if not isinstance(parent, _MFPackage):
-            raise ValueError("'parent' needs to be a _MFPackage object; found "
-                             + str(type(parent)))
+            parent = self._parent_class()
+        if not isinstance(parent, self._parent_class):
+            self.logger.error(
+                "'parent' should be an instance of a %r object; found %r",
+                self._parent_class.__name__, parent.__class__.__name__)
         self.parent = parent
         if f is None:
             if getattr(parent, 'fpath', None) is not None:
@@ -56,15 +73,10 @@ class MFFileReader(object):
                 self.parent.nam.ref_dir = os.path.dirname(self.fpath)
             except:
                 pass
-        # Set up logger
-        # name = os.path.dirname(f)
-        self.logger = logging.getLogger(self.fname)
-        self.logger.handlers = logger.handlers
-        self.logger.setLevel(logger.level)
         self.logger.info("read file '%s' with %d lines",
                          self.fname, len(self.lines))
         self.lineno = 0
-        self.data_set_num = 0
+        self.data_set_num = None
 
     def __len__(self):
         """Returns number of lines"""
@@ -108,47 +120,62 @@ class MFFileReader(object):
             raise ValueError("%d > %d ?" % (self.lineno, len(self)))
 
     @property
+    def curinfo(self):
+        """Returns line and data set number info"""
+        return str(self.lineno) + ':Data set ' + str(self.data_set_num)
+
+    @property
     def not_eof(self):
         """Reader is not at the end of file (EOF)"""
         return self.lineno < len(self.lines)
 
-    def next_line(self, data_set_num=None, internal=False):
-        """Get next line, setting data set number and increment lineno"""
-        self.data_set_num = data_set_num
-        line = self.readline()
-        if not internal:
-            self.logger.debug('%s:read line %d:"%s"',
-                              self.data_set_num, self.lineno, line.rstrip())
-        return line
+    @property
+    def curline(self):
+        """Return the current line"""
+        try:
+            if self.lineno == 0:
+                return ''
+            else:
+                return self.lines[self.lineno - 1]
+        except IndexError:
+            self.logger.error('%s:Unexpected end of file', self.curinfo)
+            raise IndexError('Unexpected end of file')
 
-    def readline(self):
-        """Name of file-like reading method, sort of alias for next_line"""
+    def nextline(self, data_set_num=None):
+        """Get next line, setting data set number and increment lineno"""
+        if data_set_num is not None:
+            self.data_set_num = data_set_num
+            self.logger.debug('%s:using nextline', self.curinfo)
         self.lineno += 1
         try:
             line = self.lines[self.lineno - 1]
         except IndexError:
             self.lineno -= 1
-            raise IndexError('unexpected end of file')
-        # if len(line) > 199:
-        #    self.logger.warn('%s:%d: line has %d characters',
-        #                     self.fname, self.lineno, len(line))
+            self.logger.error('%s:Unexpected end of file', self.curinfo)
+            raise IndexError('Unexpected end of file')
+        if data_set_num is not None:
+            self.logger.debug(
+                '%s:returning line with length %d:%r',
+                self.curinfo, len(line), line)
         return line
 
-    def get_named_items(self, data_set_num, names, fmt='s'):
-        """Get items into dict. See get_items for fmt usage"""
-        items = self.get_items(data_set_num, len(names), fmt, internal=True)
-        res = {}
-        for name, item in zip(names, items):
-            if fmt != 's':
-                item = self.conv(item, fmt, name)
-            res[name] = item
-        return res
+    def readline(self):
+        """Alias for nextline()"""
+        return self.nextline()
 
     def conv(self, item, fmt, name=None):
-        """Helper function to convert item using a format fmt
+        """Convert item to format fmt
 
-        The format code must be one of 'i' (integer), 'f' (any floating point),
-        or 's' (string). It could also be a numpy dtype."""
+        Parameters
+        ----------
+        item : str
+        fmt : str, default ('s')
+            's' for string or no conversion (default)
+            'i' for integer
+            'f' for float
+        name : str or None
+            Optional name to provide context information for debugging
+        """
         try:
             if type(fmt) == np.dtype:
                 return fmt.type(item)
@@ -169,34 +196,42 @@ class MFFileReader(object):
             raise ValueError(msg)
 
     def get_items(self, data_set_num=None, num_items=None, fmt='s',
-                  multiline=False, internal=False):
-        """Get items from one or more (if set) lines into a list. If num_items
-        is defined, then only this count will be returned and any remaining
-        items from the line will be ignored. If there are too few items on the
-        line, the values will be some form of "zero", such as 0, 0.0 or ''.
+                  multiline=False):
+        """Get items from one or more lines (if multiline) into a list
+
+        If num_items is defined, then only this count will be returned and any
+        remaining items from the line will be ignored. If there are too few
+        items on the line, the values will be some form of "zero", such as
+        0, 0.0 or ''.
+
         However, if `multiline=True`, then multiple lines can be read to reach
         num_items.
+
         If fmt is defined, it must be:
          - 's' for string or no conversion (default)
          - 'i' for integer
          - 'f' for float, as defined by parent._float_type
-         """
+        """
+        if data_set_num is not None:
+            self.data_set_num = data_set_num
+            self.logger.debug(
+                '%s:using get_items for num_items=%s',
+                self.curinfo, num_items)
         startln = self.lineno + 1
-        self.data_set_num = data_set_num
         fill_missing = False
         if num_items is None or not multiline:
-            items = self.readline().split()
+            items = self.nextline().split()
             if num_items is not None and len(items) > num_items:
                 items = items[:num_items]
-            if (not multiline and num_items is not None
-                    and len(items) < num_items):
+            if (not multiline and num_items is not None and
+                    len(items) < num_items):
                 fill_missing = (num_items - len(items))
         else:
             assert isinstance(num_items, int), type(num_items)
             assert num_items > 0, num_items
             items = []
             while len(items) < num_items:
-                items += self.readline().split()
+                items += self.nextline().split()
             if len(items) > num_items:  # trim off too many
                 items = items[:num_items]
         if fmt == 's':
@@ -209,13 +244,23 @@ class MFFileReader(object):
             else:
                 fill_value = '0'
             res += [self.conv(fill_value, fmt)] * fill_missing
-        if not internal:
+        if data_set_num is not None:
             if multiline:
                 toline = ' to %s' % (self.lineno,)
             else:
                 toline = ''
             self.logger.debug('%s:read %d items from line %d%s',
                               self.data_set_num, num_items, startln, toline)
+        return res
+
+    def get_named_items(self, data_set_num, names, fmt='s'):
+        """Get items into dict. See get_items for fmt usage"""
+        items = self.get_items(data_set_num, len(names), fmt)
+        res = {}
+        for name, item in zip(names, items):
+            if fmt != 's':
+                item = self.conv(item, fmt, name)
+            res[name] = item
         return res
 
     def read_named_items(self, data_set_num, names, fmt='s'):
@@ -233,7 +278,7 @@ class MFFileReader(object):
         self.parent.text = []
         while True:
             try:
-                line = self.next_line(data_set_num, internal=True)
+                line = self.nextline(data_set_num)
             except IndexError:
                 break
             if line.startswith('#'):
@@ -248,7 +293,7 @@ class MFFileReader(object):
 
     def read_options(self, data_set_num, process_aux=True):
         """Read options, and optionally process auxiliary variables"""
-        line = self.next_line(data_set_num, internal=True)
+        line = self.nextline(data_set_num)
         self.parent.Options = line.upper().split()
         if hasattr(self.parent, 'valid_options'):
             for opt in self.parent.Options:
@@ -272,10 +317,10 @@ class MFFileReader(object):
         to the parent object.
         """
         startln = self.lineno + 1
-        line = self.next_line(data_set_num, internal=True)
+        line = self.nextline(data_set_num)
         self.lineno -= 1
         if line.upper().startswith('PARAMETER'):
-            items = self.get_items(data_set_num, len(names) + 1, internal=True)
+            items = self.get_items(num_items=len(names) + 1)
             assert items[0].upper() == 'PARAMETER', items[0]
             for name, item in zip(names, items[1:]):
                 value = self.conv(item, 'i', name)
@@ -300,7 +345,7 @@ class MFFileReader(object):
         """
         startln = self.lineno + 1
         res = {}
-        first_line = self.next_line(data_set_num, internal=True)
+        first_line = self.nextline(data_set_num)
         # Comments are considered after a '#' character on the first line
         if '#' in first_line:
             res['text'] = first_line[(first_line.find('#') + 1):].strip()

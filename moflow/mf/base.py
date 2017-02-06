@@ -6,7 +6,6 @@ from .. import logger, logging
 # from .dis import DIS, DISU
 
 
-
 class MissingFile(Exception):
     pass
 
@@ -15,9 +14,7 @@ class MFData(object):
     pass
 
 
-
-
-class _MFPackage(object):
+class MFPackage(object):
     """The inherited ___class__.__name__ is the name of the package, which
     is always upper case and may have a version number following"""
 
@@ -48,8 +45,8 @@ class _MFPackage(object):
     @nam.setter
     def nam(self, value):
         if value is not None and value.__class__.__name__ != 'Modflow':
-            raise ValueError("'nam' needs to be a Modflow object; found "
-                             + str(type(value)))
+            raise ValueError("'nam' needs to be a Modflow object; found " +
+                             str(type(value)))
         setattr(self, '_nam', value)
 
     @property
@@ -160,7 +157,7 @@ class _MFPackage(object):
         pass
 
 
-class _MFPackageDIS(_MFPackage):
+class MFPackageDIS(MFPackage):
     """Abstract class for packages that use data from either DIS or DISU"""
     _dis = None
     _disu = None
@@ -214,6 +211,6 @@ class _MFPackageDIS(_MFPackage):
 
     def _setup_read(self):
         """Hook to set-up and check attributes"""
-        _MFPackage._setup_read(self)
+        MFPackage._setup_read(self)
         if self.dis is None and self.disu is None:
             raise AttributeError("'dis' or 'disu' is not set")

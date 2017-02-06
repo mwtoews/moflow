@@ -1,9 +1,10 @@
 import numpy as np
-from .base import _MFPackage
+
+from .base import MFPackage
 from .reader import MFFileReader
 
 
-class _Discretization(_MFPackage):
+class _Discretization(MFPackage):
     """Abstract discretization file"""
 
     @property

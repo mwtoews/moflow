@@ -1,9 +1,10 @@
 """Surface-Water Routing Process
 """
 
-__all__ = ['SWR']
-
 from .base import _MFPackage
+
+
+__all__ = ['SWR']
 
 
 class SWR(_MFPackage):

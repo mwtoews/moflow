@@ -1,14 +1,16 @@
 """Boundary Condition Packages
 """
 
+from .base import _MFPackage
+from .rch import RCH
+
+
 __all__ = [
     'BFH', 'CHD',
     'FHB', 'RCH', 'WEL',
     'DRN', 'DRT', 'ETS', 'EVT', 'GHB', 'LAK', 'MNW', 'MNW1', 'MNW2',
     'RES', 'RIV', 'SFR', 'STR',
 ]
-
-from .base import _MFPackage
 
 
 # Specified Head Boundaries
@@ -25,8 +27,6 @@ class CHD(_MFPackage):
 
 class FHB(_MFPackage):
     """Flow and Head Boundary Package"""
-
-from .rch import RCH
 
 
 class WEL(_MFPackage):

@@ -1,15 +1,15 @@
 """Basic Package
 """
 
-__all__ = ['BAS6']
-
 import numpy as np
 
-from .base import _MFPackageDIS
+from .base import MFPackageDIS
 from .reader import MFFileReader
 
+__all__ = ['BAS6']
 
-class BAS6(_MFPackageDIS):
+
+class BAS6(MFPackageDIS):
     """Basic Package"""
 
     valid_options = ['XSECTION', 'CHTOCH', 'FREE', 'PRINTTIME',

@@ -1,23 +1,12 @@
-# -*- coding: utf-8 -*-
-"""
-Modflow module
-"""
-
 import os
 
-import pkg
-from . import logger, logging
-
-
-# from .pkg.bas import BAS6
-# from .pkg.dis import DIS, DISU
-# from .pkg.gwfp import MULT, ZONE, PVAL
-# from .pkg.bc import CHD, FHB, RCH, WEL
-
+from .. import logging, logger
+from . import class_dict
+from .base import MFPackage, MFData
 
 
 class Modflow(object):
-    """Base class for MODFLOW packages, based on Name File (nam)
+    """Base class for MODFLOW packages, based on Name File (NAM)
 
     Each package can attach to this object as a lower-case attribute name
     of the package name.
@@ -55,7 +44,7 @@ class Modflow(object):
         setattr(self, '_prefix', value)
 
     _logger = None
-    _packages = None  # _MFPackage objects
+    _packages = None  # MFPackage objects
     _nunit = None  # keys are integer nunit of either fpath str or file object
     data = None  # MFData objects
 
@@ -97,10 +86,10 @@ class Modflow(object):
         """Sets Modflow package object"""
         existing = getattr(self, name, None)
         if ((hasattr(self, name) or name.startswith('_')) and
-                not isinstance(existing, pkg.base._MFPackage)):
+                not isinstance(existing, MFPackage)):
             # Set existing, non-Modflow package object as normal
             object.__setattr__(self, name, value)
-        elif isinstance(value, pkg.base._MFPackage):
+        elif isinstance(value, MFPackage):
             if name != value.__class__.__name__.lower():
                 raise AttributeError("%r must have an attribute name %r" %
                                      (value.__class__.__name__,
@@ -113,7 +102,7 @@ class Modflow(object):
                 self._packages.append(name)
                 self._logger.debug('attribute %r: adding %r package',
                                    name, value.__class__.__name__)
-                if isinstance(existing, pkg.base._MFPackage):
+                if isinstance(existing, MFPackage):
                     self._logger.error('attribute %r: existed before, but was '
                                        'not found in _packages list', name)
             else:
@@ -126,7 +115,7 @@ class Modflow(object):
                                        value.__class__.__name__)
             object.__setattr__(self, name, value)
         else:
-            raise ValueError(("attribute %r (%r) must be a _MFPackage object "
+            raise ValueError(("attribute %r (%r) must be a MFPackage object "
                               "or other existing attribute.") % (name, value))
 
     def __delattr__(self, name):
@@ -138,8 +127,8 @@ class Modflow(object):
 
     def append(self, package):
         """Append a package to the end, using a default attribute"""
-        if not isinstance(package, pkg.base._MFPackage):
-            raise ValueError("value must be a _MFPackage-related object; "
+        if not isinstance(package, MFPackage):
+            raise ValueError("value must be a MFPackage-related object; "
                              "found " + repr(package.__class__))
         name = package._attr_name
         if hasattr(self, name):
@@ -216,15 +205,15 @@ class Modflow(object):
             # all lowercase, or any combination.
             ftype = ftype.upper()
             if ftype.startswith('DATA'):
-                obj = pkg.base.MFData()
-            elif ftype in pkg.class_dict:
-                obj = pkg.class_dict[ftype]()
+                obj = MFData()
+            elif ftype in class_dict:
+                obj = class_dict[ftype]()
                 assert obj.__class__.__name__ == ftype,\
                     (obj.__class__.__name__, ftype)
             else:
                 log.warn("%d:ftype: %r not identified as a supported "
                          "file type", ln, ftype)
-                obj = pkg.base._MFPackage()
+                obj = MFPackage()
             # set back-references for NameFile and Nunit
             obj.nam = self
             obj.nunit = nunit = int(nunit)
@@ -258,7 +247,7 @@ class Modflow(object):
             obj.fname = fname
             obj.fpath = fpath
             fpath_exists = os.path.isfile(obj.fpath)
-            if isinstance(obj, pkg.base._MFPackage) and not fpath_exists:
+            if isinstance(obj, MFPackage) and not fpath_exists:
                 log.warn("%d:fname: '%s' does not exist in '%s'",
                          ln, obj.fname, self.ref_dir)
             # Interpret option
@@ -272,7 +261,7 @@ class Modflow(object):
                     log.debug("%d:option:%r: file exists and will be replaced",
                               ln, option)
             obj.nam_option = option
-            if isinstance(obj, pkg.base._MFPackage):
+            if isinstance(obj, MFPackage):
                 setattr(self, obj._attr_name, obj)
         log.debug('finished reading %d lines', ln)
         del log
