@@ -2,7 +2,7 @@ import os
 import numpy as np
 
 
-from .. import logger, logging
+from .._logger import logger, logging
 # from .dis import DIS, DISU
 
 

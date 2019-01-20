@@ -17,13 +17,13 @@ else:
     from io import StringIO, BytesIO
 
 
-class TestPackage(MFPackage):
+class ExamplePackage(MFPackage):
     par1 = None
     par2 = None
 
 
 def test_mf_reader_basics():
-    p = TestPackage()
+    p = ExamplePackage()
     f = StringIO(dedent('''\
         # A comment
         100 ignore
@@ -69,7 +69,7 @@ def test_mf_reader_basics():
 
 
 def test_mf_reader_empty():
-    p = TestPackage()
+    p = ExamplePackage()
     f = StringIO('# Empty file')
     r = MFFileReader(f, p)
     assert r.not_eof
@@ -85,7 +85,7 @@ def test_mf_reader_empty():
 def test_mf_read_free_arrays():
     # Examples from page 8-59 of TM6A16_MF2005
     m = Modflow()
-    p = TestPackage()
+    p = ExamplePackage()
     m.append(p)
     f = StringIO(dedent('''\
     CONSTANT  5.7     This sets an entire array to the value "5.7".
@@ -170,7 +170,7 @@ def test_mf_read_free_arrays():
 
 def test_mf_read_fixed_arrays():
     m = Modflow()
-    p = TestPackage()
+    p = ExamplePackage()
     p.nunit = 11
     m.append(p)
     f = StringIO('''\

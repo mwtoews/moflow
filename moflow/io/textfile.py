@@ -32,8 +32,9 @@ def _proc_fmt(fmt):
     else:
         m = _re_conv.findall(fmt)
         if not m:
-            raise ValueError("fmt %r does not match pattern '%s'" %
-                             (fmt, _re_conv.pattern))
+            raise ValueError(
+                "fmt {0!r} does not match pattern '{1}'"
+                .format(fmt, _re_conv.pattern))
         code, width = m[0]
         if width:
             width = int(width)
@@ -70,7 +71,7 @@ def conv(item, fmt, on_blank=None):
     """
     code, width = _proc_fmt(fmt)
     if width and len(item) > width:
-        warn('%r longer than width %d' % (item, width))
+        warn('{0!r} longer than width {1}'.format(item, width))
         item = item[:width]
     item = item.strip()
     if item == '':
@@ -92,9 +93,10 @@ def conv(item, fmt, on_blank=None):
             else:
                 raise ValueError()
         else:
-            raise ValueError('Unknown use for ' + repr(code))
+            raise ValueError('unknown use for {0!r}'.format(code))
     except ValueError:
-        raise ValueError('cannot convert %r to fmt code %r' % (item, fmt))
+        raise ValueError(
+            'cannot convert {0!r} to fmt code {1!r}'.format(item, fmt))
     return conv_item
 
 

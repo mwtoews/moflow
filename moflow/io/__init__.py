@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from ..mf.base import MFPackage
-from .. import logger, logging
+from .._logger import logger, logging
 
 
 class MFIO(object):
