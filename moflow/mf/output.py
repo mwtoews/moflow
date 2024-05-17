@@ -1,30 +1,28 @@
-"""Output Control
-"""
+"""Output Control."""
 
 from .base import MFPackage
 
-
-__all__ = ['GAGE', 'HYD', 'LMT6', 'MNWI', 'OC', 'LIST']
+__all__ = ["GAGE", "HYD", "LMT6", "MNWI", "OC", "LIST"]
 
 
 class GAGE(MFPackage):
-    """Gage Package"""
+    """Gage Package."""
 
 
 class HYD(MFPackage):
-    """HYDMOD Package"""
+    """HYDMOD Package."""
 
 
 class LMT6(MFPackage):
-    """Link-MT3DMS Package"""
+    """Link-MT3DMS Package."""
 
 
 class MNWI(MFPackage):
-    """Multi-Node Well Information Package"""
+    """Multi-Node Well Information Package."""
 
 
 class OC(MFPackage):
-    """Output Control Option"""
+    """Output Control Option."""
 
 
 class LIST(MFPackage):

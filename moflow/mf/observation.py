@@ -1,39 +1,37 @@
-"""Observation Process
-"""
+"""Observation Process."""
 
 from .base import MFPackage
 
-
-__all__ = ['CHOB', 'DROB', 'DTOB', 'GBOB', 'OBS', 'HOB', 'RVOB', 'STOB']
+__all__ = ["CHOB", "DROB", "DTOB", "GBOB", "OBS", "HOB", "RVOB", "STOB"]
 
 
 class CHOB(MFPackage):
-    """Constant-Head Flow Observation Input File"""
+    """Constant-Head Flow Observation Input File."""
 
 
 class DROB(MFPackage):
-    """Drain Observation Input File"""
+    """Drain Observation Input File."""
 
 
 class DTOB(MFPackage):
-    """Drain Return Observation Input File (MODFLOW-2000 only)"""
+    """Drain Return Observation Input File (MODFLOW-2000 only)."""
 
 
 class GBOB(MFPackage):
-    """General-Head-Boundary Observation Input File"""
+    """General-Head-Boundary Observation Input File."""
 
 
 class OBS(MFPackage):
-    """Observation Process input file (MODFLOW-2000 only)"""
+    """Observation Process input file (MODFLOW-2000 only)."""
 
 
 class HOB(MFPackage):
-    """Head-Observation Input File"""
+    """Head-Observation Input File."""
 
 
 class RVOB(MFPackage):
-    """River Observation Input File"""
+    """River Observation Input File."""
 
 
 class STOB(MFPackage):
-    """Stream Observation Input File (MODFLOW-2000 only)"""
+    """Stream Observation Input File (MODFLOW-2000 only)."""

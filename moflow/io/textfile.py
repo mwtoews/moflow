@@ -1,31 +1,25 @@
-# -*- coding: utf-8 -*-
 import re
 from enum import Enum
 from warnings import warn
 
 from . import MFIO
 
-try:
-    from collections import OrderedDict
-except ImportError:
-    from ordereddict import OrderedDict
-
-
-_re_conv = re.compile(r'^([sifb])(\d*)$')
+_re_conv = re.compile(r"^([sifb])(\d*)$")
 _re_conv_fmt = {}
 
 
 def _proc_fmt(fmt):
-    """Process fmt code and optional width
+    """Process fmt code and optional width.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
         fmt : str
             Format code; see `conv`
 
-    Returns:
-    --------
+    Returns
+    -------
     (code, width)
+
     """
     if fmt in _re_conv_fmt:
         code, width = _re_conv_fmt[fmt]
@@ -33,8 +27,8 @@ def _proc_fmt(fmt):
         m = _re_conv.findall(fmt)
         if not m:
             raise ValueError(
-                "fmt {0!r} does not match pattern '{1}'"
-                .format(fmt, _re_conv.pattern))
+                f"fmt {fmt!r} does not match pattern '{_re_conv.pattern}'",
+            )
         code, width = m[0]
         if width:
             width = int(width)
@@ -47,7 +41,7 @@ def _proc_fmt(fmt):
 
 
 def conv(item, fmt, on_blank=None):
-    """Convert item to from fmt to a Python value
+    """Convert item to from fmt to a Python value.
 
     Parameters
     ----------
@@ -68,70 +62,71 @@ def conv(item, fmt, on_blank=None):
     ------
     ValueError
         If the Item cannot be converted, or cannot understand fmt.
+
     """
     code, width = _proc_fmt(fmt)
     if width and len(item) > width:
-        warn('{0!r} longer than width {1}'.format(item, width))
+        warn(f"{item!r} longer than width {width}")
         item = item[:width]
     item = item.strip()
-    if item == '':
+    if item == "":
         if on_blank is None:
             return None
         item = on_blank
     try:
-        if code == 's':
+        if code == "s":
             conv_item = item
-        elif code == 'i':
+        elif code == "i":
             conv_item = int(item)
-        elif code == 'f':
+        elif code == "f":
             conv_item = float(item)
-        elif code == 'b':
-            if item.upper() in ('T', 'TRUE', '.TRUE.', '1'):
+        elif code == "b":
+            if item.upper() in ("T", "TRUE", ".TRUE.", "1"):
                 conv_item = True
-            elif item.upper() in ('F', 'FALSE', '.FALSE.', '0'):
+            elif item.upper() in ("F", "FALSE", ".FALSE.", "0"):
                 conv_item = False
             else:
-                raise ValueError()
+                raise ValueError
         else:
-            raise ValueError('unknown use for {0!r}'.format(code))
+            raise ValueError(f"unknown use for {code!r}")
     except ValueError:
-        raise ValueError(
-            'cannot convert {0!r} to fmt code {1!r}'.format(item, fmt))
+        raise ValueError(f"cannot convert {item!r} to fmt code {fmt!r}")
     return conv_item
 
 
 class TextFile(MFIO):
-    """Any formatted text file with data sets"""
+    """Any formatted text file with data sets."""
+
     fixed = None  # fixed or free format
     lines = None  # list of raw line data
     lineno = None  # line number
     dsid = None  # data set identifier
     delimiter = None  # default delimiter, if not whitespace / free
 
-    def __init__(self, parent, **kwargs):
+    def __init__(self, parent, **kwargs) -> None:
         MFIO.__init__(self, parent=parent)
         self.lineno = None
         self.dsid = None
         self.lines = []
-        if 'fixed' in kwargs:
-            self.fixed = self.parent._fixed = kwargs.pop('fixed')
-            self.log.debug('setting fixed=%r', self.fixed)
+        if "fixed" in kwargs:
+            self.fixed = self.parent._fixed = kwargs.pop("fixed")
+            self.log.debug("setting fixed=%r", self.fixed)
         else:
-            self.fixed = getattr(self.parent, '_fixed', None)
+            self.fixed = getattr(self.parent, "_fixed", None)
         # Get a refrence to any unit numbers to open external files
-        if hasattr(parent, 'nam') and hasattr(parent.nam, 'nunit'):
+        if hasattr(parent, "nam") and hasattr(parent.nam, "nunit"):
             self.nunit = parent.nam.nunit
         else:
             self.nunit = {}
-        return
 
-    def __len__(self):
-        """Returns number of lines"""
+    def __len__(self) -> int:
+        """Returns number of lines."""
         return len(self.lines)
 
 
 class OnError(Enum):
-    '''Actions to take when encountering an error'''
+    """Actions to take when encountering an error."""
+
     zero = 0
     default = 1
     value_error = 2
@@ -139,99 +134,103 @@ class OnError(Enum):
 
 
 class TextFileReader(TextFile):
-    """Reader for formatted text file with data sets"""
+    """Reader for formatted text file with data sets."""
 
-    def __init__(self, parent, fname, **kwargs):
+    def __init__(self, parent, fname, **kwargs) -> None:
         TextFile.__init__(self, parent=parent)
-        if hasattr(fname, 'upper'):
-            self.log.info('reading file %s', fname)
+        if hasattr(fname, "upper"):
+            self.log.info("reading file %s", fname)
             # Read whole file at once, then close it
-            with open(fname, 'r') as fp:
+            with open(fname) as fp:
                 self.lines = fp.readlines()
-        elif hasattr(fname, 'readlines'):
-            self.log.info('reading lines from %r', fname)
+        elif hasattr(fname, "readlines"):
+            self.log.info("reading lines from %r", fname)
             self.lines = fname.readlines()
         else:
             raise TypeError(
-                "'fname' does not appear to be a file name or object: " +
-                repr(fname))
-        self.lineno = getattr(fname, 'lineno', 0)
+                f"'fname' does not appear to be a file name or object: {fname!r}",
+            )
+        self.lineno = getattr(fname, "lineno", 0)
         self.closed = False
         self.dsid = None
-        return
 
     @property
     def not_eof(self):
-        """Reader is not at the end of file (EOF)"""
+        """Reader is not at the end of file (EOF)."""
         return self.lineno < len(self.lines)
 
-    def check_end(self):
-        """Check end of file and show messages in logger on status"""
+    def check_end(self) -> None:
+        """Check end of file and show messages in logger on status."""
         if len(self) == self.lineno:
             self.logger.info("finished reading %d lines", self.lineno)
         elif len(self) > self.lineno:
             remain = len(self) - self.lineno
-            a, b = 's', ''
+            a, b = "s", ""
             if remain == 1:
                 b, a = a, b
-            self.logger.warn(
+            self.logger.warning(
                 "finished reading %d lines, but %d line%s remain%s",
-                self.lineno, remain, a, b)
+                self.lineno,
+                remain,
+                a,
+                b,
+            )
         else:
             raise ValueError("%d > %d ?" % (self.lineno, len(self)))
 
     def curinfo(self, delta=0):
-        """Returns line and data set identifier info"""
+        """Returns line and data set identifier info."""
         lineno = self.lineno
         if delta:
             try:
                 lineno += delta
             except:
                 pass
-        return str(lineno) + ':data set ' + str(self.dsid)
+        return str(lineno) + ":data set " + str(self.dsid)
 
     @property
     def curline(self):
-        """Return the current line"""
+        """Return the current line."""
         try:
             if self.lineno == 0:
-                return ''
+                return ""
             else:
                 return self.lines[self.lineno - 1]
         except IndexError:
-            raise IOError('Unexpected end of file')
+            raise EOFError("Unexpected end of file")
 
     def nextline(self, dsid=None):
-        """Return the next line and increment lineno"""
+        """Return the next line and increment lineno."""
         if dsid is not None:
             self.dsid = dsid
-            self.log.debug('%s:using nextline', self.curinfo(True))
+            self.log.debug("%s:using nextline", self.curinfo(True))
         self.lineno += 1
         try:
             line = self.lines[self.lineno - 1]
         except IndexError:
             self.lineno -= 1
-            raise IOError('Unexpected end of file')
+            raise EOFError("Unexpected end of file")
         if dsid is not None:
-            self.log.debug('%s:returning line with length %d:%r',
-                           self.curinfo(), len(line), line)
+            self.log.debug(
+                "%s:returning line with length %d:%r", self.curinfo(), len(line), line,
+            )
         return line
 
     def readline(self):
-        """Alias to nextline"""
+        """Alias to nextline."""
         return self.nextline()
 
-    def getitem(self, dsid=None, startnextline=True, fmt=None,
-                on_error=OnError.default):
-        """Get one item"""
+    def getitem(
+        self, dsid=None, startnextline=True, fmt=None, on_error=OnError.default,
+    ) -> None:
+        """Get one item."""
         if dsid is not None:
             self.dsid = dsid
-            msg = 'using getitem'
+            msg = "using getitem"
             if not startnextline:
-                msg += ' on current line'
-            msg += ' with fmt=' + repr(fmt)
-            self.log.debug(
-                '%s:%s', self.curinfo(startnextline), msg)
+                msg += " on current line"
+            msg += f" with {fmt=}"
+            self.log.debug("%s:%s", self.curinfo(startnextline), msg)
         code, width = _proc_fmt(fmt)
         if on_error == OnError.default:
             if width:
@@ -246,26 +245,29 @@ class TextFileReader(TextFile):
             line = line[:width].strip()
         else:
             line = line.strip()
-        if line == '':
+        if line == "":
             if on_error == OnError.zero:
-                line = '0'
+                line = "0"
             if on_error == OnError.none:
-                return None
+                return
             elif on_error == OnError.value_error:
-                msg = '%s:%s' % (self.curinfo(), "empty input for 'getitem'")
+                msg = "%s:%s" % (self.curinfo(), "empty input for 'getitem'")
                 self.log.error(msg)
                 raise ValueError(msg)
             else:
-                raise KeyError(
-                    "unhandled 'on_error' condition: " + repr(on_error))
+                raise KeyError(f"unhandled 'on_error' condition: {on_error!r}")
         if not width:
             dat = line.split()[0]
-            
-        
 
-    def getitems(self, dsid=None, startnextline=True, multiline=False,
-                 fmts=None, on_error=ValueError):
-        """Get items from one or more lines (if multiline) into a list
+    def getitems(
+        self,
+        dsid=None,
+        startnextline=True,
+        multiline=False,
+        fmts=None,
+        on_error=ValueError,
+    ):
+        """Get items from one or more lines (if multiline) into a list.
 
         If num_items is defined, then only this count will be returned and any
         remainding items from the line will be ignored. If num_items is a
@@ -288,17 +290,16 @@ class TextFileReader(TextFile):
         if dsid is not None:
             self.dsid = dsid
             if num_items == 1:
-                msg = 'one item'
+                msg = "one item"
             else:
-                msg = str(num_items) + ' items'
+                msg = str(num_items) + " items"
             if multiline:
-                msg += ' over multiple lines'
+                msg += " over multiple lines"
             if widths:
-                msg += ' with fixed widths ' + str(widths)
+                msg += " with fixed widths " + str(widths)
             if not startnextline:
-                msg += ', starting on the current line'
-            self.log.debug(
-                '%s:using getitems for %s', self.curinfo(startnextline), msg)
+                msg += ", starting on the current line"
+            self.log.debug("%s:using getitems for %s", self.curinfo(startnextline), msg)
         # Gather items
         items = []
         if multiline:
@@ -307,13 +308,13 @@ class TextFileReader(TextFile):
             while len(items) < num_items:
                 try:
                     line = self.nextline()
-                except IOError:
-                    message = ('Unexpected end of file, read %d '
-                               'of requested %d items') % \
-                              (len(items), num_items)
-                    raise IOError(message)
+                except EOFError:
+                    message = (
+                        "Unexpected end of file, read %d of requested %d items"
+                    ) % (len(items), num_items)
+                    raise EOFError(message)
                 if self.delimiter:
-                    line = line.replace(self.delimiter, ' ')
+                    line = line.replace(self.delimiter, " ")
                 items += line.split()
         else:
             if startnextline:
@@ -323,25 +324,27 @@ class TextFileReader(TextFile):
             if widths:  # fixed width
                 pos = 0
                 for w in widths:
-                    item = line[pos:pos + w]
+                    item = line[pos : pos + w]
                     if len(item) == 0:
                         break
                     items.append(item)
                     pos += w
             else:  # free
                 if self.delimiter:
-                    line = line.replace(self.delimiter, ' ')
+                    line = line.replace(self.delimiter, " ")
                 items = line.split()
         if len(items) > num_items:
             # trim off too many
             items = items[:num_items]
         elif len(items) < num_items:
             self.log.debug(
-                ('%s:requested %d item%s, but found %d; '
-                 "remaining %d will be None"),
+                ("%s:requested %d item%s, but found %d; remaining %d will be None"),
                 self.curinfo(),
-                num_items, '' if num_items == 1 else 's',
-                len(items), (num_items - len(items)))
+                num_items,
+                "" if num_items == 1 else "s",
+                len(items),
+                (num_items - len(items)),
+            )
             items += [None] * (num_items - len(items))
         # Convert format
         assert len(codes) == len(items)
@@ -350,32 +353,40 @@ class TextFileReader(TextFile):
                 items[idx] = self.conv(items[idx], codes[idx], idx1=idx + 1)
         if dsid is not None:
             self.log.debug(
-                '%s:returning %d items:%r', self.curinfo(), len(items), items)
+                "%s:returning %d items:%r", self.curinfo(), len(items), items,
+            )
         return items
 
-    def getnameditems(self, dsid, required=None, optional=[]):
-        """Get items into an OrderedDict"""
+    def getnameditems(self, dsid, required=None, optional=[]) -> dict:
+        """Get items into a dict."""
         if dsid is not None:
             if required is None:
-                if (getattr(self.parent, '_format', None) and
-                        dsid in self.parent._format):
+                if (
+                    getattr(self.parent, "_format", None)
+                    and dsid in self.parent._format
+                ):
                     required = self.parent._format[dsid]
                 else:
-                    raise ValueError(
-                        "'required' missing for " + str(dsid))
-            if (not optional and getattr(self.parent, '_optional', None) and
-                    dsid in self.parent._optional):
+                    raise ValueError("'required' missing for " + str(dsid))
+            if (
+                not optional
+                and getattr(self.parent, "_optional", None)
+                and dsid in self.parent._optional
+            ):
                 optional = self.parent._optional[dsid]
             self.dsid = dsid
             if optional:
-                and_opt = ' and %d optional' % (len(optional),)
+                and_opt = " and %d optional" % (len(optional),)
             else:
-                and_opt = ''
+                and_opt = ""
             self.log.debug(
-                '%s:using getnameditems for %d required%s items',
-                self.curinfo(True), len(required), and_opt)
+                "%s:using getnameditems for %d required%s items",
+                self.curinfo(True),
+                len(required),
+                and_opt,
+            )
         if required is None:
-            raise ValueError('required must be specified')
+            raise ValueError("required must be specified")
         num_items = (len(required), len(optional))
         if self.fixed:
             widths = []
@@ -384,23 +395,26 @@ class TextFileReader(TextFile):
                     m = _re_conv.match(f)
                     widths.append(int(m.groups()[1]))
                 except:
-                    self.log.warn("%s:cannot match %r from '%s'",
-                                  n, f, _re_conv.pattern)
+                    self.log.warning(
+                        "%s:cannot match %r from '%s'", n, f, _re_conv.pattern,
+                    )
                     widths = None
                     break
         else:  # free
             widths = None
         items = self.getitems(None, num_items, widths=widths)
-        res = OrderedDict()
+        res = {}
         for idx1, (name, fmt) in enumerate(required, 1):
             self.conv(items, fmt, name, idx1, res)
         for idx1, (name, fmt) in enumerate(optional, 1 + idx1):
             self.conv(items, fmt, name, idx1, res, optional=True)
         if items:
-            self.log.warn('remaining items: %r', items)
+            self.log.warning("remaining items: %r", items)
         if data_set_num is not None:
             self.log.debug(
-                '%s:returning %d items:%s',
-                self.curinfo(), len(res),
-                ', '.join(['%s=%r' % i for i in res.items()]))
+                "%s:returning %d items:%s",
+                self.curinfo(),
+                len(res),
+                ", ".join(["%s=%r" % i for i in res.items()]),
+            )
         return res

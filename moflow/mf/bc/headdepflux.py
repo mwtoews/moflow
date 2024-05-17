@@ -1,99 +1,114 @@
-"""Boundary Condition Packages
-"""
+"""Boundary Condition Packages."""
 
 from .base import _MFPackage
 from .rch import RCH
 
-
 __all__ = [
-    'BFH', 'CHD',
-    'FHB', 'RCH', 'WEL',
-    'DRN', 'DRT', 'ETS', 'EVT', 'GHB', 'LAK', 'MNW', 'MNW1', 'MNW2',
-    'RES', 'RIV', 'SFR', 'STR',
+    "BFH",
+    "CHD",
+    "FHB",
+    "RCH",
+    "WEL",
+    "DRN",
+    "DRT",
+    "ETS",
+    "EVT",
+    "GHB",
+    "LAK",
+    "MNW",
+    "MNW1",
+    "MNW2",
+    "RES",
+    "RIV",
+    "SFR",
+    "STR",
 ]
 
 
 # Specified Head Boundaries
 
+
 class BFH(_MFPackage):
-    """Boundary Flow and Head Package"""
+    """Boundary Flow and Head Package."""
 
 
 class CHD(_MFPackage):
-    """Ground-Water Flow Process Time-Variant Specified-Head Package"""
+    """Ground-Water Flow Process Time-Variant Specified-Head Package."""
 
 
 # Specified Flux Boundaries
 
+
 class FHB(_MFPackage):
-    """Flow and Head Boundary Package"""
+    """Flow and Head Boundary Package."""
 
 
 class WEL(_MFPackage):
-    """Ground-Water Flow Process Well Package"""
+    """Ground-Water Flow Process Well Package."""
 
 
 # Head-Dependent Flux Boundary Packages
 
+
 class DAF(_MFPackage):
-    """DAFLOW Package surface-water input file"""
+    """DAFLOW Package surface-water input file."""
 
 
 class DAFG(_MFPackage):
-    """DAFLOW Package ground-water input file"""
+    """DAFLOW Package ground-water input file."""
 
 
 class DRN(_MFPackage):
-    """Ground-Water Flow Process Drain Package"""
+    """Ground-Water Flow Process Drain Package."""
 
 
 class DRT(_MFPackage):
-    """Drain Return Package"""
+    """Drain Return Package."""
 
 
 class ETS(_MFPackage):
-    """Evapotranspiration Segments Package"""
+    """Evapotranspiration Segments Package."""
 
 
 class EVT(_MFPackage):
-    """Ground-Water Flow Process Evapotranspiration Package"""
+    """Ground-Water Flow Process Evapotranspiration Package."""
 
 
 class GHB(_MFPackage):
-    """Ground-Water Flow Process General-Head Boundary Package"""
+    """Ground-Water Flow Process General-Head Boundary Package."""
 
 
 class LAK(_MFPackage):
-    """Lake Package"""
+    """Lake Package."""
 
 
 class MNW(_MFPackage):
-    """Multi-Node, Drawdown-Limited Well Package"""
+    """Multi-Node, Drawdown-Limited Well Package."""
 
 
 class MNW1(MNW):
-    """Multi-Node Well Package version 1"""
+    """Multi-Node Well Package version 1."""
 
 
 class MNW2(_MFPackage):
-    """Multi-Node Well Package version 2"""
+    """Multi-Node Well Package version 2."""
 
 
 class RES(_MFPackage):
-    """Reservoir Package"""
+    """Reservoir Package."""
 
 
 class RIV(_MFPackage):
-    """Ground-Water Flow Process River Package"""
+    """Ground-Water Flow Process River Package."""
 
 
 class SFR(_MFPackage):
-    """Streamflow-Routing Package"""
+    """Streamflow-Routing Package."""
 
 
 class STR(_MFPackage):
-    """Stream Package"""
+    """Stream Package."""
 
 
 class UZF(_MFPackage):
-    """Ground-Water Flow Process Unsaturated-Zone Flow Package"""
+    """Ground-Water Flow Process Unsaturated-Zone Flow Package."""

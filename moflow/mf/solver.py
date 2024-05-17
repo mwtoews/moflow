@@ -1,39 +1,37 @@
-"""Solvers
-"""
+"""Solvers."""
 
 from .base import MFPackage
 
-
-__all__ = ['DE4', 'GMG', 'LMG', 'PCG', 'SIP', 'SOR', 'NWT', 'SMS']
+__all__ = ["DE4", "GMG", "LMG", "PCG", "SIP", "SOR", "NWT", "SMS"]
 
 
 class DE4(MFPackage):
-    """Direct Solution Package"""
+    """Direct Solution Package."""
 
 
 class GMG(MFPackage):
-    """GMG - Geometric Multigrid Solver"""
+    """GMG - Geometric Multigrid Solver."""
 
 
 class LMG(MFPackage):
-    """Link-AMG Package"""
+    """Link-AMG Package."""
 
 
 class PCG(MFPackage):
-    """Preconditioned Conjugate-Gradient Package"""
+    """Preconditioned Conjugate-Gradient Package."""
 
 
 class SIP(MFPackage):
-    """Strongly Implicit Procedure Package"""
+    """Strongly Implicit Procedure Package."""
 
 
 class SOR(MFPackage):
-    """Slice-Successive Over-Relaxation Package"""
+    """Slice-Successive Over-Relaxation Package."""
 
 
 class NWT(MFPackage):
-    """Newton Solver (MODFLOW-NWT only)"""
+    """Newton Solver (MODFLOW-NWT only)."""
 
 
 class SMS(MFPackage):
-    """Sparse Matrix Solver (>= MODFLOW-USG)"""
+    """Sparse Matrix Solver (>= MODFLOW-USG)."""
