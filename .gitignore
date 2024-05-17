@@ -1,35 +1,71 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
 *.py[cod]
+*$py.class
 
-# C extensions
-*.so
-
-# Packages
-*.egg
-*.egg-info
-dist
-build
-eggs
-parts
-bin
-var
-sdist
-develop-eggs
+# Distribution / packaging
+build/
+dist/
+sdist/
+wheels/
+*.egg-info/
 .installed.cfg
-lib
-lib64
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
 
 # Installer logs
 pip-log.txt
+pip-delete-this-directory.txt
 
 # Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
 .coverage
-.tox
+.coverage.*
+.cache
 nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
 
-# Translations
-*.mo
+# Sphinx documentation
+docs/_build/
 
-# Mr Developer
-.mr.developer.cfg
-.project
-.pydevproject
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "moflow"
+dynamic = ["version"]
+authors = [
+    {name = "Mike Taves", email = "mwtoews@gmail.com"},
+]
+description = "Lightweight tools for MODFLOW and related programs"
+readme = "README.md"
+keywords = ["MODFLOW"]
+requires-python = ">=3.8"
+license = "BSD-3-Clause"
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+dependencies = [
+    "numpy",
+    "pandas",
+]
+
+[project.urls]
+"Source code" = "https://github.com/mwtoews/moflow"
+
+[tool.hatch.version]
+path = "moflow/_version.py"
